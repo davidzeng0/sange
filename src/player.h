@@ -237,6 +237,7 @@ private:
 	double seek_to;
 
 	double time;
+	double time_start;
 	double duration;
 	long dropped_frames;
 	long total_frames;
