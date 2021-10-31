@@ -306,6 +306,8 @@ int Player::read_packet(){
 
 		time = (double)packet -> pts / stream -> time_base.den;
 
+		if(time < 0)
+			time = 0;
 		bool uninit_pipeline = false;
 
 		if(filters_set()){
