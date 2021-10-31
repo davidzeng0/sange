@@ -217,11 +217,8 @@ int Player::read_packet(){
 				encoder_has_data = false;
 			else if(err)
 				return err;
-			else{
-				packet -> time_base.den = encoderctx -> time_base.den;
-
+			else
 				break;
-			}
 		}
 
 		if(filter_has_data){
@@ -305,9 +302,8 @@ int Player::read_packet(){
 		if(err) return err;
 
 		time = (double)packet -> pts / stream -> time_base.den;
+		time -= time_start;
 
-		if(time < 0)
-			time = 0;
 		bool uninit_pipeline = false;
 
 		if(filters_set()){
@@ -324,10 +320,9 @@ int Player::read_packet(){
 				samples = opus_packet_get_samples_per_frame(packet -> data, sample_rate);
 			if(samples == OPUS_INVALID_PACKET)
 				return AVERROR(EINVAL);
-			if(channels == audio_out.channels && sample_rate == audio_out.sample_rate){
+			if(channels == audio_out.channels && sample_rate == audio_out.sample_rate)
 				packet -> duration = samples;
-				packet -> time_base.den = sample_rate;
-			}else{
+			else{
 				uninit_pipeline = false;
 
 				if(!pipeline && (err = init_pipeline()) < 0)
@@ -439,6 +434,10 @@ void Player::run(){
 		duration = (double)stream -> duration / stream -> time_base.den;
 	else
 		duration = (double)format_ctx -> duration / AV_TIME_BASE;
+	if(format_ctx -> start_time != AV_NOPTS_VALUE)
+		time_start = (double)format_ctx -> start_time / AV_TIME_BASE;
+	else
+		time_start = 0;
 	if(stream -> codecpar -> codec_id != PLAYER_OUTPUT_CODEC && (err = init_pipeline()) < 0)
 		goto end;
 	send_message(PLAYER_READY);
@@ -470,6 +469,8 @@ void Player::run(){
 				seek_to = 0;
 			else if(seek_to > duration)
 				seek_to = duration;
+			seek_to += time_start;
+
 			int64_t time = (int64_t)(seek_to * stream -> time_base.den);
 
 			err = avformat_seek_file(format_ctx, stream_index, time - 1, time, time + 1, 0);
@@ -515,7 +516,7 @@ void Player::run(){
 		if(b_stop)
 			break;
 		int64_t dur = packet -> duration;
-		int den = packet -> time_base.den;
+		int den = pipeline ? encoderctx -> time_base.den : audio_out.sample_rate;
 
 		sleep.tv_nsec += dur * 1'000'000'000 / den;
 
@@ -631,6 +632,7 @@ Player::Player(PlayerWrapper* w) : message(this){
 	wrapper = w;
 
 	time = 0;
+	time_start = 0;
 	duration = 0;
 	dropped_frames = 0;
 	total_frames = 0;
