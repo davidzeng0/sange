@@ -1,5 +1,6 @@
 #include <iostream>
 #include <uv.h>
+#include <vector>
 #include "wrapper.h"
 #include "message.h"
 
@@ -32,6 +33,8 @@ PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<
 }
 
 PlayerWrapper::~PlayerWrapper(){
+	if(player)
+		player -> destroy();
 	std::cout << "destructor called" << std::endl;
 }
 
@@ -107,7 +110,7 @@ Napi::Value PlayerWrapper::setTremolo(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::setEqualizer(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	Equalizer* eqs = new Equalizer[info.Length()];
+	std::vector<Equalizer> eqs(info[0].As<Napi::Array>().Length(), Equalizer());
 
 	for(size_t i = 0; i < info.Length(); i++){
 		Napi::Object obj = info[i].As<Napi::Object>();
@@ -116,13 +119,7 @@ Napi::Value PlayerWrapper::setEqualizer(const Napi::CallbackInfo& info){
 		eqs[i].gain = obj.Get("gain").As<Napi::Number>().DoubleValue();
 	}
 
-	try{
-		player -> setEqualizer(eqs, info.Length());
-	}catch(std::bad_alloc& e){
-		delete[] eqs;
-
-		throw e;
-	}
+	player -> setEqualizer(eqs.data(), eqs.size());
 
 	return info.Env().Undefined();
 }
@@ -253,8 +250,27 @@ void PlayerWrapper::handle_finish(){
 void PlayerWrapper::handle_error(){
 	const PlayerError& err = player -> getError();
 
+	bool retry;
+
+	switch(err.code){
+		case AVERROR_HTTP_BAD_REQUEST:
+		case AVERROR_HTTP_UNAUTHORIZED:
+		case AVERROR_HTTP_FORBIDDEN:
+		case AVERROR_HTTP_NOT_FOUND:
+		case AVERROR_HTTP_OTHER_4XX:
+		case AVERROR_HTTP_SERVER_ERROR:
+			retry = true;
+
+			break;
+		default:
+			retry = false;
+
+			break;
+	}
+
 	Napi::Error error = Napi::Error::New(Env(), err.error);
 	Napi::Number code = Napi::Number::New(Env(), err.code);
+	Napi::Boolean retryable = Napi::Boolean::New(Env(), retry);
 
-	self.Get("onerror").As<Napi::Function>().Call(self.Value(), {error.Value(), code});
+	self.Get("onerror").As<Napi::Function>().Call(self.Value(), {error.Value(), code, retryable});
 }

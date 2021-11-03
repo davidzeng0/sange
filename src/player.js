@@ -1,31 +1,22 @@
-const bindings = require('bindings');
-const ffplayer = bindings('sange');
 const EventEmitter = require('events');
 
-const FFPLAYER_RETRYABLE_ERRORS = new Map();
+const bindings = require('bindings');
+const ffplayer = bindings('sange');
 
-FFPLAYER_RETRYABLE_ERRORS.set(-808465656, 'HTTP 400');
-FFPLAYER_RETRYABLE_ERRORS.set(-825242872, 'HTTP 401');
-FFPLAYER_RETRYABLE_ERRORS.set(-858797304, 'HTTP 403');
-FFPLAYER_RETRYABLE_ERRORS.set(-875574520, 'HTTP 404');
-FFPLAYER_RETRYABLE_ERRORS.set(-1482175736, 'HTTP 4XX');
-FFPLAYER_RETRYABLE_ERRORS.set(-1482175992, 'HTTP 5XX');
-
-module.exports = class Player extends EventEmitter{
-	constructor(){
+class Player extends EventEmitter{
+	constructor(bind_emitters = true){
 		super();
 
 		this.paused = false;
 		this.ffplayer = new ffplayer();
-		this.ffplayer.onready = this.emit.bind(this, 'ready');
-		this.ffplayer.onpacket = this.emit.bind(this, 'packet');
-		this.ffplayer.onfinish = this.emit.bind(this, 'finish');
-		this.ffplayer.ondebug = this.emit.bind(this, 'debug');
-		this.ffplayer.onerror = this.onerror.bind(this);
-	}
 
-	onerror(error, code){
-		this.emit('error', error, FFPLAYER_RETRYABLE_ERRORS.has(code));
+		if(bind_emitters){
+			this.ffplayer.onready = this.emit.bind(this, 'ready');
+			this.ffplayer.onpacket = this.emit.bind(this, 'packet');
+			this.ffplayer.onfinish = this.emit.bind(this, 'finish');
+			this.ffplayer.ondebug = this.emit.bind(this, 'debug');
+			this.ffplayer.onerror = this.emit.bind(this, 'onerror');
+		}
 	}
 
 	setURL(url){
@@ -102,3 +93,5 @@ module.exports = class Player extends EventEmitter{
 		return this.ffplayer.destroy();
 	}
 }
+
+module.exports = Player;
