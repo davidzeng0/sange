@@ -110,7 +110,7 @@ Napi::Value PlayerWrapper::setTremolo(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::setEqualizer(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	std::vector<Equalizer> eqs(info[0].As<Napi::Array>().Length(), Equalizer());
+	std::vector<Equalizer> eqs(info.Length(), Equalizer());
 
 	for(size_t i = 0; i < info.Length(); i++){
 		Napi::Object obj = info[i].As<Napi::Object>();
