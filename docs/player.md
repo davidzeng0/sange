@@ -10,7 +10,9 @@ class Player extends EventEmitter
 
 Instantiate a player
 ```js
-var player = new Player();
+const {AudioPlayer} = require('sange');
+
+var player = new AudioPlayer();
 
 player.on('ready', () => { console.log('ready') });
 player.on('packet', (p) => { console.log('packet', p) });
@@ -38,7 +40,7 @@ player.on('ready', () => {
 Packet
 ```js
 class Packet{
-	frame_size: Number; // number of samples
+	frame_size: number; // number of samples
 	buffer: Buffer; // frame data
 }
 
@@ -59,7 +61,7 @@ player.on('finish', () => {
 
 Error
 ```js
-player.on('error', (error: Error, retryable: boolean) => {
+player.on('error', (error: Error, code: number, retryable: boolean) => {
 	console.log(`Error: ${error.message}`);
 
 	if(retryable && shouldStillRetry()){ // dont retry too many times if it fails every time
@@ -82,12 +84,12 @@ player.on('error', (error: Error, retryable: boolean) => {
 
 Set the URL source of the player
 ```js
-player.setURL(url: String): void
+player.setURL(url: string): void
 ```
 
 Set the output format
 ```js
-player.setOutput(channels: Number, sampleRate: Number, bitRate: Number): void
+player.setOutput(channels: number, sampleRate: number, bitRate: number): void
 ```
 
 Pause or unpause the player
@@ -105,13 +107,13 @@ Set the player's volume
 // 1 = 100%
 // 1.5 = 150%
 // 0.5 = 50%
-player.setVolume(volume: Number): void
+player.setVolume(volume: number): void
 ```
 
 Set the player's bitrate
 ```js
 //bitrate in bits/sec
-player.setBitrate(bitrate: Number): void
+player.setBitrate(bitrate: number): void
 ```
 
 Set the player's speed
@@ -119,7 +121,7 @@ Set the player's speed
 // 1 = normal speed
 // 2 = double speed
 // 0.5 = half speed
-player.setRate(rate: Number): void
+player.setRate(rate: number): void
 ```
 
 Set the player's tempo
@@ -127,12 +129,12 @@ Set the player's tempo
 // 1 = normal tempo
 // 2 = double tempo
 // 0.5 = half tempo
-player.setTempo(tempo: Number): void
+player.setTempo(tempo: number): void
 ```
 
 Set a tremolo effect
 ```js
-player.setTremolo(depth: Number, rate: Number): void
+player.setTremolo(depth: number, rate: number): void
 
 // stop tremolo
 player.setTremolo(0, 0);
@@ -141,8 +143,8 @@ player.setTremolo(0, 0);
 Set an equalizer
 ```js
 class EqualizerSetting{
-	band: Number, // Hz
-	gain: Number // dB
+	band: number, // Hz
+	gain: number // dB
 }
 
 player.setEqualizer(eqs: EqualizerSetting[]): void
@@ -154,19 +156,19 @@ player.setEqualizer([]);
 Seek the player (can be called anytime)
 ```js
 // time in seconds
-player.seek(time: Number): void
+player.seek(time: number): void
 ```
 
 Get player's current time
 ```js
 // time in seconds
-player.getTime(): Number
+player.getTime(): number
 ```
 
 Get player's duration
 ```js
 // time in seconds
-player.getDuration(): Number
+player.getDuration(): number
 ```
 
 Start the player

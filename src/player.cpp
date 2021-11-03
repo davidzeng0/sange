@@ -409,7 +409,15 @@ void Player::run(){
 
 	for(int i = 0; i < format_ctx -> nb_streams; i++){
 		AVStream* stream = format_ctx -> streams[i];
-		AVMediaType type = stream -> codecpar -> codec_type;
+
+		if(stream -> codecpar -> codec_type != AVMEDIA_TYPE_AUDIO)
+			stream -> discard = AVDISCARD_ALL;
+	}
+
+	if((err = avformat_find_stream_info(format_ctx, nullptr)) < 0)
+		goto end;
+	for(int i = 0; i < format_ctx -> nb_streams; i++){
+		AVStream* stream = format_ctx -> streams[i];
 
 		stream -> discard = AVDISCARD_ALL;
 	}
@@ -417,10 +425,7 @@ void Player::run(){
 	stream_index = av_find_best_stream(format_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
 
 	if(stream_index < 0){
-		error.error += "No audio stream found";
-		error.code = AVERROR_STREAM_NOT_FOUND;
-
-		send_message(PLAYER_ERROR);
+		err = stream_index;
 
 		goto end;
 	}
@@ -428,8 +433,6 @@ void Player::run(){
 	stream = format_ctx -> streams[stream_index];
 	stream -> discard = AVDISCARD_DEFAULT;
 
-	if((err = avformat_find_stream_info(format_ctx, nullptr)) < 0)
-		goto end;
 	if(stream -> duration != AV_NOPTS_VALUE)
 		duration = (double)stream -> duration / stream -> time_base.den;
 	else
