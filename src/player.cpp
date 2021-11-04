@@ -466,17 +466,11 @@ void Player::run(){
 		}
 
 		if(b_seek){
-			b_seek = false;
+			int64_t time;
 
-			if(seek_to < 0)
-				seek_to = 0;
-			else if(seek_to > duration)
-				seek_to = duration;
-			seek_to += time_start;
-
-			int64_t time = (int64_t)(seek_to * stream -> time_base.den);
-
+			time = (int64_t)((seek_to + time_start) * (double)stream -> time_base.den);
 			err = avformat_seek_file(format_ctx, stream_index, time - 1, time, time + 1, 0);
+			b_seek = false;
 
 			if(!err){
 				if(pipeline)
@@ -563,6 +557,8 @@ void Player::cleanup(){
 }
 
 void Player::player_thread(){
+	std::cout << "enter thread" << std::endl;
+
 	while(!destroyed){
 		if(b_stop && !b_start){
 			wait_cond([&]{
@@ -738,8 +734,13 @@ void Player::setPaused(bool paused){
 }
 
 void Player::seek(double time){
-	b_seek = true;
 	seek_to = time;
+
+	if(seek_to < 0)
+		seek_to = 0;
+	else if(seek_to > duration)
+		seek_to = duration;
+	b_seek = true;
 
 	signal_cond();
 }

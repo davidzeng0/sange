@@ -29,13 +29,13 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 }
 
 PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<PlayerWrapper>(info), self(Napi::Persistent(info.This().As<Napi::Object>())){
+	player = nullptr;
 	player = new Player(this);
 }
 
 PlayerWrapper::~PlayerWrapper(){
 	if(player)
 		player -> destroy();
-	std::cout << "destructor called" << std::endl;
 }
 
 void PlayerWrapper::checkDestroyed(Napi::Env env){
