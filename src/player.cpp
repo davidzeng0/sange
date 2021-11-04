@@ -2,6 +2,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <opus/opus.h>
+#include <pthread.h>
 #include "player.h"
 #include "message.h"
 
@@ -397,6 +398,8 @@ void Player::run(){
 	error.error.clear();
 	err = avformat_open_input(&format_ctx, url.c_str(), nullptr, &options);
 
+	av_dict_free(&options);
+
 	if(err){
 		switch(err){
 			case AVERROR(EINVAL):
@@ -521,8 +524,12 @@ void Player::run(){
 			goto end;
 		}
 
-		if(b_stop)
+		if(b_stop){
+			av_packet_unref(packet);
+
 			break;
+		}
+
 		int64_t dur = packet -> duration;
 		int den = pipeline ? encoderctx -> time_base.den : audio_out.sample_rate;
 
@@ -542,6 +549,12 @@ void Player::run(){
 			sleep = now;
 		}else{
 			clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep, nullptr);
+
+			if(b_stop){
+				av_packet_unref(packet);
+
+				break;
+			}
 		}
 
 		total_frames++;
@@ -702,6 +715,8 @@ void Player::start(){
 
 	if(err)
 		throw PlayerException("Could not create thread", err);
+	pthread_detach(thread);
+
 	running = true;
 }
 
