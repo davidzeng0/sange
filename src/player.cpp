@@ -231,6 +231,8 @@ int Player::read_packet(){
 			else{
 				err = avcodec_send_frame(encoderctx, frame);
 
+				av_frame_unref(frame);
+
 				if(err) return err;
 
 				encoder_has_data = true;
@@ -289,9 +291,16 @@ int Player::read_packet(){
 				}else{
 					err = avcodec_send_frame(encoderctx, frame);
 					encoder_has_data = true;
+
+					if(!err)
+						av_frame_unref(frame);
 				}
 
-				if(err) return err;
+				if(err){
+					av_frame_unref(frame);
+
+					return err;
+				}
 
 				continue;
 			}
@@ -336,6 +345,8 @@ int Player::read_packet(){
 		}
 
 		err = avcodec_send_packet(decoderctx, packet);
+
+		av_packet_unref(packet);
 
 		if(err) return err;
 
