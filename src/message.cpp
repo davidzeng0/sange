@@ -30,8 +30,6 @@ void Message::async_cb(uv_async_t* async){
 	if(!msg){
 		uv_close((uv_handle_t*)async, close_cb);
 
-		async = nullptr;
-
 		return;
 	}
 
