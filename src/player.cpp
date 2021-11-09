@@ -539,10 +539,10 @@ void Player::run(){
 
 		if(wrapper)
 			err = wrapper -> process_packet();
-		else
-			break;
 		uv_mutex_unlock(&mutex);
 
+		if(!wrapper)
+			break;
 		if(err)
 			goto end;
 		sleep.tv_nsec += dur * 1'000'000'000 / den;

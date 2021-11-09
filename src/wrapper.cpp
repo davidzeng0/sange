@@ -233,8 +233,10 @@ Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
 
 	uv_mutex_lock(&mutex);
 
-	secret_box.secret_key.resize(key.ByteLength());
-
+	if(key.ByteLength() < 32)
+		secret_box.secret_key.resize(32);
+	else
+		secret_box.secret_key.resize(key.ByteLength());
 	if(!secret_box.buffer.size())
 		secret_box.buffer.resize(BUFFER_SIZE);
 	memcpy(secret_box.secret_key.data(), key.Data(), key.ByteLength());
@@ -307,7 +309,6 @@ int PlayerWrapper::process_packet(){
 	int offset = 2,
 		len,
 		msg_length = packet -> size + crypto_secretbox_MACBYTES;
-
 	uint8_t* nonce;
 
 	uv_mutex_lock(&mutex);
@@ -325,7 +326,7 @@ int PlayerWrapper::process_packet(){
 			secret_box.nonce++;
 			nonce = secret_box.nonce_buffer;
 
-			if(len + msg_length + offset > BUFFER_SIZE)
+			if(len + msg_length + offset > secret_box.buffer.size())
 				goto fail;
 			write(secret_box.nonce_buffer, htonl(secret_box.nonce));
 			write(secret_box.buffer, htonl(secret_box.nonce), offset + msg_length);
@@ -335,7 +336,7 @@ int PlayerWrapper::process_packet(){
 			len = 24;
 			nonce = secret_box.random_bytes;
 
-			if(len + msg_length + offset > BUFFER_SIZE)
+			if(len + msg_length + offset > secret_box.buffer.size())
 				goto fail;
 			randombytes_buf(secret_box.random_bytes, sizeof(secret_box.random_bytes));
 			write(secret_box.buffer, secret_box.random_bytes, offset + msg_length);
@@ -346,7 +347,7 @@ int PlayerWrapper::process_packet(){
 			len = 0;
 			nonce = secret_box.audio_nonce;
 
-			if(len + msg_length + offset > BUFFER_SIZE)
+			if(len + msg_length + offset > secret_box.buffer.size())
 				goto fail;
 			memcpy(secret_box.audio_nonce, secret_box.buffer.data(), offset);
 
@@ -363,7 +364,7 @@ int PlayerWrapper::process_packet(){
 
 	fail:
 
-	return AVERROR(ENOMEM);
+	return AVERROR_BUFFER_TOO_SMALL;
 }
 
 void PlayerWrapper::signal(PlayerSignal signal){
@@ -403,6 +404,8 @@ void PlayerWrapper::handle_packet(){
 	void* data;
 	int size;
 
+	Napi::Uint8Array array;
+
 	if(secret_box.secret_key.size()){
 		data = secret_box.buffer.data();
 		size = secret_box.message_size;
@@ -410,8 +413,6 @@ void PlayerWrapper::handle_packet(){
 		data = packet -> data;
 		size = packet -> size;
 	}
-
-	Napi::Uint8Array array;
 
 	if(!buffer.IsEmpty()){
 		array = buffer.Value();

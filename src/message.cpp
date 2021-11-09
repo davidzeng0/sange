@@ -11,7 +11,6 @@ static uv_cond_t cond;
 static ulong num_players = 0;
 
 static bool active = false;
-static bool processing = false;
 
 static void close_cb(uv_handle_t* handle){
 	free(handle);
@@ -36,17 +35,9 @@ void Message::async_cb(uv_async_t* async){
 
 	do{
 		next = msg -> m_next;
-		msg -> m_next = nullptr;
 		msg -> received();
 		msg = next;
 	}while(msg);
-
-	uv_mutex_lock(&mutex);
-
-	processing = false;
-
-	uv_cond_broadcast(&cond);
-	uv_mutex_unlock(&mutex);
 }
 
 void Message::init(){
@@ -92,6 +83,11 @@ void Message::dec(){
 Message::Message(Player* p){
 	player = p;
 	initialized = false;
+	waiting = false;
+	sending = false;
+
+	uv_mutex_init(&smutex);
+	uv_cond_init(&scond);
 }
 
 int Message::async_init(){
@@ -107,38 +103,47 @@ int Message::async_init(){
 void Message::send(){
 	bool send = false;
 
+	sending = true;
+
 	uv_mutex_lock(&mutex);
 
-	while(processing)
-		uv_cond_wait(&cond, &mutex);
 	m_next = message_head;
 	message_head = this;
 
 	if(!active){
 		active = true;
 		send = true;
-		processing = true;
 	}
+
+	uv_mutex_unlock(&mutex);
 
 	if(send)
 		uv_async_send(async);
-	while(processing)
-		uv_cond_wait(&cond, &mutex);
-	uv_mutex_unlock(&mutex);
 }
 
 void Message::wait(){
-	if(!processing)
+	if(!sending)
 		return;
-	uv_mutex_lock(&mutex);
+	uv_mutex_lock(&smutex);
 
-	while(processing)
-		uv_cond_wait(&cond, &mutex);
-	uv_mutex_unlock(&mutex);
+	waiting = true;
+
+	while(sending)
+		uv_cond_wait(&scond, &smutex);
+	waiting = false;
+
+	uv_mutex_unlock(&smutex);
 }
 
 void Message::received(){
 	player -> received_message();
+	sending = false;
+
+	uv_mutex_lock(&smutex);
+
+	if(waiting)
+		uv_cond_signal(&scond);
+	uv_mutex_unlock(&smutex);
 }
 
 Message::~Message(){
