@@ -16,5 +16,5 @@ add_library(sange SHARED
 	"src/addon.cpp"
 )
 
-target_link_libraries(sange avformat avcodec avutil avfilter uv opus pthread ${CMAKE_JS_LIB})
+target_link_libraries(sange avformat avcodec avutil avfilter uv opus pthread sodium ${CMAKE_JS_LIB})
 set_target_properties(sange PROPERTIES PREFIX "" SUFFIX ".node")
