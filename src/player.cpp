@@ -642,11 +642,8 @@ void Player::send_message(PlayerSignal sig){
 }
 
 void Player::received_message(){
-	uv_mutex_lock(&mutex);
-
 	if(wrapper)
 		wrapper -> signal(signal);
-	uv_mutex_unlock(&mutex);
 }
 
 void Player::send_error(int err){
