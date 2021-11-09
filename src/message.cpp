@@ -103,6 +103,8 @@ int Message::async_init(){
 void Message::send(){
 	bool send = false;
 
+	wait();
+
 	sending = true;
 
 	uv_mutex_lock(&mutex);

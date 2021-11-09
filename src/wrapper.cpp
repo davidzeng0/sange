@@ -217,10 +217,10 @@ Napi::Value PlayerWrapper::stop(const Napi::CallbackInfo& info){
 
 Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 	if(player){
-		av_packet_free(&packet);
-
 		player -> destroy();
 		player = nullptr;
+
+		av_packet_free(&packet);
 	}
 
 	return info.Env().Undefined();
