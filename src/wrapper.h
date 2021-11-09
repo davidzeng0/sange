@@ -1,8 +1,34 @@
 #pragma once
 #include <napi.h>
+#include <vector>
 #include "ffmpeg.h"
 
 class PlayerWrapper;
+
+struct SecretBox{
+	enum{
+		NONE = 0,
+		LITE,
+		SUFFIX,
+		DEFAULT
+	};
+
+	std::vector<uint8_t> secret_key;
+	std::vector<uint8_t> buffer;
+
+	uint8_t nonce_buffer[24];
+	uint8_t random_bytes[24];
+	uint8_t audio_nonce[24];
+
+	unsigned int timestamp;
+	unsigned int nonce;
+
+	int mode;
+	int ssrc;
+	int message_size;
+
+	unsigned short sequence;
+};
 
 #include "player.h"
 
@@ -11,6 +37,7 @@ private:
 	Player* player;
 
 	Napi::ObjectReference self;
+	Napi::Reference<Napi::Uint8Array> buffer;
 
 	void checkDestroyed(Napi::Env env);
 
@@ -18,6 +45,11 @@ private:
 	void handle_packet();
 	void handle_finish();
 	void handle_error();
+
+	SecretBox secret_box;
+	AVPacket* packet;
+
+	uv_mutex_t mutex;
 public:
 	static Napi::Function init(Napi::Env env);
 
@@ -60,6 +92,14 @@ public:
 	Napi::Value stop(const Napi::CallbackInfo& info);
 
 	Napi::Value destroy(const Napi::CallbackInfo& info);
+
+	Napi::Value setSecretBox(const Napi::CallbackInfo& info);
+
+	Napi::Value updateSecretBox(const Napi::CallbackInfo& info);
+
+	Napi::Value getSecretBox(const Napi::CallbackInfo& info);
+
+	int process_packet();
 
 	void signal(PlayerSignal signal);
 };

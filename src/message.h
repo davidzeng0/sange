@@ -9,20 +9,13 @@ class Message;
 
 class Message{
 private:
-	static uv_async_t* async;
-	static Message* message_head;
-	static ulong num_players;
-	static uv_mutex_t mutex;
-	static bool active;
-	static bool mutex_init;
-
 	static int inc();
 	static void dec();
 
-	bool incd;
-
 	Player* player;
 	Message* m_next;
+
+	bool initialized;
 
 	static void async_cb(uv_async_t* async);
 public:
@@ -34,5 +27,6 @@ public:
 	int async_init();
 
 	void send();
+	void wait();
 	void received();
 };

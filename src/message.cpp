@@ -3,14 +3,15 @@
 #include "player.h"
 #include "message.h"
 
-uv_async_t* Message::async = nullptr;
-Message* Message::message_head = nullptr;
-uv_mutex_t Message::mutex = {};
+static uv_async_t* async = nullptr;
+static Message* message_head = nullptr;
+static uv_mutex_t mutex;
+static uv_cond_t cond;
 
-ulong Message::num_players = 0;
+static ulong num_players = 0;
 
-bool Message::active = false;
-bool Message::mutex_init = false;
+static bool active = false;
+static bool processing = false;
 
 static void close_cb(uv_handle_t* handle){
 	free(handle);
@@ -39,10 +40,18 @@ void Message::async_cb(uv_async_t* async){
 		msg -> received();
 		msg = next;
 	}while(msg);
+
+	uv_mutex_lock(&mutex);
+
+	processing = false;
+
+	uv_cond_broadcast(&cond);
+	uv_mutex_unlock(&mutex);
 }
 
 void Message::init(){
 	uv_mutex_init(&mutex);
+	uv_cond_init(&cond);
 }
 
 int Message::inc(){
@@ -82,7 +91,7 @@ void Message::dec(){
 
 Message::Message(Player* p){
 	player = p;
-	incd = false;
+	initialized = false;
 }
 
 int Message::async_init(){
@@ -90,7 +99,7 @@ int Message::async_init(){
 
 	if(err)
 		return err;
-	incd = true;
+	initialized = true;
 
 	return 0;
 }
@@ -100,18 +109,32 @@ void Message::send(){
 
 	uv_mutex_lock(&mutex);
 
+	while(processing)
+		uv_cond_wait(&cond, &mutex);
 	m_next = message_head;
 	message_head = this;
 
 	if(!active){
 		active = true;
 		send = true;
+		processing = true;
 	}
-
-	uv_mutex_unlock(&mutex);
 
 	if(send)
 		uv_async_send(async);
+	while(processing)
+		uv_cond_wait(&cond, &mutex);
+	uv_mutex_unlock(&mutex);
+}
+
+void Message::wait(){
+	if(!processing)
+		return;
+	uv_mutex_lock(&mutex);
+
+	while(processing)
+		uv_cond_wait(&cond, &mutex);
+	uv_mutex_unlock(&mutex);
 }
 
 void Message::received(){
@@ -119,6 +142,6 @@ void Message::received(){
 }
 
 Message::~Message(){
-	if(incd)
+	if(initialized)
 		dec();
 }

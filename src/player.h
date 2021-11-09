@@ -223,8 +223,6 @@ private:
 
 	bool running;
 	bool destroyed;
-	bool queued;
-	bool waiting;
 
 	bool pipeline;
 
@@ -291,6 +289,7 @@ private:
 	void run();
 	void cleanup();
 	void player_thread();
+	bool should_run();
 
 	template<class T>
 	void wait_cond(T t);
