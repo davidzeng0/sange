@@ -15,7 +15,12 @@ private:
 	Player* player;
 	Message* m_next;
 
+	uv_mutex_t smutex;
+	uv_cond_t scond;
+
 	bool initialized;
+	bool sending;
+	bool waiting;
 
 	static void async_cb(uv_async_t* async);
 public:
