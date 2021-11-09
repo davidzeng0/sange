@@ -4,11 +4,11 @@ const bindings = require('bindings');
 const ffplayer = bindings('sange');
 
 class Player extends EventEmitter{
-	constructor(bind_emitters = true){
+	constructor(buffer, bind_emitters = true){
 		super();
 
 		this.paused = false;
-		this.ffplayer = new ffplayer();
+		this.ffplayer = buffer ? new ffplayer(buffer) : new ffplayer();
 
 		if(bind_emitters){
 			this.ffplayer.onready = this.emit.bind(this, 'ready');

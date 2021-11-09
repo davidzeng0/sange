@@ -1,8 +1,12 @@
 #include <iostream>
 #include <uv.h>
-#include <vector>
+#include <netdb.h>
+#include <sodium/crypto_secretbox.h>
+#include <sodium/randombytes.h>
 #include "wrapper.h"
 #include "message.h"
+
+#define BUFFER_SIZE 8192
 
 Napi::Function PlayerWrapper::init(Napi::Env env){
 	Napi::Function constructor = DefineClass(env, "Player", {
@@ -22,7 +26,10 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 		InstanceMethod<&PlayerWrapper::getTotalFrames>("getTotalFrames"),
 		InstanceMethod<&PlayerWrapper::start>("start"),
 		InstanceMethod<&PlayerWrapper::stop>("stop"),
-		InstanceMethod<&PlayerWrapper::destroy>("destroy")
+		InstanceMethod<&PlayerWrapper::destroy>("destroy"),
+		InstanceMethod<&PlayerWrapper::setSecretBox>("setSecretBox"),
+		InstanceMethod<&PlayerWrapper::updateSecretBox>("updateSecretBox"),
+		InstanceMethod<&PlayerWrapper::getSecretBox>("getSecretBox")
 	});
 
 	return constructor;
@@ -30,12 +37,33 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 
 PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<PlayerWrapper>(info), self(Napi::Persistent(info.This().As<Napi::Object>())){
 	player = nullptr;
-	player = new Player(this);
+	packet = av_packet_alloc();
+
+	if(!packet)
+		throw std::bad_alloc();
+	try{
+		player = new Player(this);
+	}catch(std::bad_alloc& e){
+		av_packet_free(&packet);
+
+		throw;
+	}
+
+	uv_mutex_init(&mutex);
+
+	memset(secret_box.nonce_buffer, 0, sizeof(secret_box.nonce_buffer));
+	memset(secret_box.audio_nonce, 0, sizeof(secret_box.audio_nonce));
+
+	if(info.Length() > 0)
+		buffer = std::move(Napi::Reference<Napi::Uint8Array>(Napi::Persistent(info[0].As<Napi::Uint8Array>())));
 }
 
 PlayerWrapper::~PlayerWrapper(){
-	if(player)
+	if(player){
 		player -> destroy();
+
+		av_packet_free(&packet);
+	}
 }
 
 void PlayerWrapper::checkDestroyed(Napi::Env env){
@@ -189,6 +217,8 @@ Napi::Value PlayerWrapper::stop(const Napi::CallbackInfo& info){
 
 Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 	if(player){
+		av_packet_free(&packet);
+
 		player -> destroy();
 		player = nullptr;
 	}
@@ -196,9 +226,149 @@ Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 	return info.Env().Undefined();
 }
 
+Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
+	Napi::Uint8Array key = info[0].As<Napi::Uint8Array>();
+	Napi::Number mode = info[1].As<Napi::Number>();
+	Napi::Number ssrc = info[2].As<Napi::Number>();
+
+	uv_mutex_lock(&mutex);
+
+	secret_box.secret_key.resize(key.ByteLength());
+
+	if(!secret_box.buffer.size())
+		secret_box.buffer.resize(BUFFER_SIZE);
+	memcpy(secret_box.secret_key.data(), key.Data(), key.ByteLength());
+
+	secret_box.buffer[0] = 0x80;
+	secret_box.buffer[1] = 0x78;
+	secret_box.mode = mode.Int32Value();
+	secret_box.ssrc = ssrc.Int32Value();
+	secret_box.sequence = 0;
+	secret_box.timestamp = 0;
+	secret_box.nonce = 0;
+
+	uv_mutex_unlock(&mutex);
+
+	return info.Env().Undefined();
+}
+
+Napi::Value PlayerWrapper::updateSecretBox(const Napi::CallbackInfo& info){
+	Napi::Number sequence = info[0].As<Napi::Number>();
+	Napi::Number timestamp = info[1].As<Napi::Number>();
+	Napi::Number nonce = info[2].As<Napi::Number>();
+
+	uv_mutex_lock(&mutex);
+
+	secret_box.sequence = sequence.Uint32Value();
+	secret_box.timestamp = timestamp.Uint32Value();
+	secret_box.nonce = nonce.Uint32Value();
+
+	uv_mutex_unlock(&mutex);
+
+	return info.Env().Undefined();
+}
+
+Napi::Value PlayerWrapper::getSecretBox(const Napi::CallbackInfo& info){
+	Napi::Object box = Napi::Object::New(info.Env());
+
+	box["nonce"] = secret_box.nonce;
+	box["timestamp"] = secret_box.timestamp;
+	box["sequence"] = secret_box.sequence;
+
+	return box;
+}
+
+template<class T>
+static void write(void* data, T value){
+	*((T*)data) = value;
+}
+
+template<typename T>
+static void write(std::vector<uint8_t>& data, T value, int offset){
+	write(data.data() + offset, value);
+}
+
+template<typename T>
+static void write_offset(std::vector<uint8_t>& data, T value, int& offset){
+	write(data, value, offset);
+
+	offset += sizeof(T);
+}
+
+int PlayerWrapper::process_packet(){
+	if(!player) abort();
+
+	av_packet_move_ref(packet, player -> packet);
+
+	if(!secret_box.secret_key.size())
+		return 0;
+	if(packet -> size > crypto_secretbox_MESSAGEBYTES_MAX)
+		return AVERROR(EINVAL); /* should never happen */
+	int offset = 2,
+		len,
+		msg_length = packet -> size + crypto_secretbox_MACBYTES;
+
+	uint8_t* nonce;
+
+	uv_mutex_lock(&mutex);
+
+	secret_box.sequence++;
+	secret_box.timestamp += packet -> duration;
+
+	write_offset(secret_box.buffer, htons(secret_box.sequence), offset);
+	write_offset(secret_box.buffer, htonl(secret_box.timestamp), offset);
+	write_offset(secret_box.buffer, htonl(secret_box.ssrc), offset);
+
+	switch(secret_box.mode){
+		case SecretBox::LITE:
+			len = 4;
+			secret_box.nonce++;
+			nonce = secret_box.nonce_buffer;
+
+			if(len + msg_length + offset > BUFFER_SIZE)
+				goto fail;
+			write(secret_box.nonce_buffer, htonl(secret_box.nonce));
+			write(secret_box.buffer, htonl(secret_box.nonce), offset + msg_length);
+
+			break;
+		case SecretBox::SUFFIX:
+			len = 24;
+			nonce = secret_box.random_bytes;
+
+			if(len + msg_length + offset > BUFFER_SIZE)
+				goto fail;
+			randombytes_buf(secret_box.random_bytes, sizeof(secret_box.random_bytes));
+			write(secret_box.buffer, secret_box.random_bytes, offset + msg_length);
+
+			break;
+		case SecretBox::DEFAULT:
+		default:
+			len = 0;
+			nonce = secret_box.audio_nonce;
+
+			if(len + msg_length + offset > BUFFER_SIZE)
+				goto fail;
+			memcpy(secret_box.audio_nonce, secret_box.buffer.data(), offset);
+
+			break;
+	}
+
+	crypto_secretbox_easy(secret_box.buffer.data() + offset, packet -> data, packet -> size, nonce, secret_box.secret_key.data());
+
+	secret_box.message_size = offset + msg_length + len;
+
+	uv_mutex_unlock(&mutex);
+
+	return 0;
+
+	fail:
+
+	return AVERROR(ENOMEM);
+}
+
 void PlayerWrapper::signal(PlayerSignal signal){
-	if(!player)
-		return;
+	if(!player) abort();
+
 	Napi::HandleScope scope(Env());
 
 	try{
@@ -230,17 +400,33 @@ void PlayerWrapper::handle_ready(){
 }
 
 void PlayerWrapper::handle_packet(){
-	AVPacket* pkt = player -> packet;
+	void* data;
+	int size;
 
-	Napi::Object packet = Napi::Object::New(Env());
-	Napi::Uint8Array array = Napi::Uint8Array::New(Env(), pkt -> size);
+	if(secret_box.secret_key.size()){
+		data = secret_box.buffer.data();
+		size = secret_box.message_size;
+	}else{
+		data = packet -> data;
+		size = packet -> size;
+	}
 
-	memcpy(array.Data(), pkt -> data, pkt -> size);
+	Napi::Uint8Array array;
 
-	packet["buffer"] = array;
-	packet["frame_size"] = pkt -> duration;
+	if(!buffer.IsEmpty()){
+		array = buffer.Value();
 
-	self.Get("onpacket").As<Napi::Function>().Call(self.Value(), {packet});
+		if(size > array.ByteLength())
+			size = array.ByteLength();
+	}else{
+		array = Napi::Uint8Array::New(Env(), size);
+	}
+
+	memcpy(array.Data(), data, size);
+
+	self.Get("onpacket").As<Napi::Function>().Call(self.Value(), {array, Napi::Number::New(Env(), size), Napi::Number::New(Env(), packet -> duration)});
+
+	av_packet_unref(packet);
 }
 
 void PlayerWrapper::handle_finish(){

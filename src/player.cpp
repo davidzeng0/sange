@@ -465,7 +465,7 @@ void Player::run(){
 	encoder_has_data = false;
 	filter_has_data = false;
 
-	while(!b_stop){
+	while(should_run()){
 		if(b_bitrate){
 			b_bitrate = false;
 
@@ -494,6 +494,8 @@ void Player::run(){
 			}
 		}
 
+		if(!should_run())
+			break;
 		if(pause){
 			wait_cond([&]{
 				return pause;
@@ -502,19 +504,21 @@ void Player::run(){
 			clock_gettime(CLOCK_MONOTONIC, &sleep);
 		}
 
+		if(!should_run())
+			break;
 		err = read_packet();
 
-		if(b_stop)
+		if(!should_run())
 			break;
 		if(err < 0){
 			if(err == AVERROR_EOF){
 				send_message(PLAYER_FINISH);
 
 				wait_cond([&](){
-					return !destroyed && !b_seek;
+					return !destroyed && !b_stop && !b_seek;
 				});
 
-				if(destroyed)
+				if(destroyed || b_stop)
 					break;
 				continue;
 			}
@@ -524,15 +528,23 @@ void Player::run(){
 			goto end;
 		}
 
-		if(b_stop){
-			av_packet_unref(packet);
+		message.wait();
 
+		if(!should_run())
 			break;
-		}
-
 		int64_t dur = packet -> duration;
 		int den = pipeline ? encoderctx -> time_base.den : audio_out.sample_rate;
 
+		uv_mutex_lock(&mutex);
+
+		if(wrapper)
+			err = wrapper -> process_packet();
+		else
+			break;
+		uv_mutex_unlock(&mutex);
+
+		if(err)
+			goto end;
 		sleep.tv_nsec += dur * 1'000'000'000 / den;
 
 		if(sleep.tv_nsec > 1'000'000'000){
@@ -549,19 +561,15 @@ void Player::run(){
 			sleep = now;
 		}else{
 			clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep, nullptr);
-
-			if(b_stop){
-				av_packet_unref(packet);
-
-				break;
-			}
 		}
 
 		total_frames++;
 
-		send_message(PLAYER_PACKET);
-		av_packet_unref(packet);
+		signal = PLAYER_PACKET;
+		message.send();
 	}
+
+	av_packet_unref(packet);
 
 	return;
 
@@ -586,10 +594,12 @@ void Player::player_thread(){
 	while(!destroyed){
 		if(b_stop && !b_start){
 			wait_cond([&]{
-				return b_stop && !b_start;
+				return !destroyed && b_stop && !b_start;
 			});
 		}
 
+		if(destroyed)
+			break;
 		run();
 		cleanup();
 
@@ -597,11 +607,17 @@ void Player::player_thread(){
 		b_start = false;
 	}
 
+	message.wait();
+
 	running = false;
 
 	delete this;
 
 	std::cout << "exit thread" << std::endl;
+}
+
+bool Player::should_run(){
+	return !destroyed && !b_stop;
 }
 
 void Player::signal_cond(){
@@ -621,23 +637,16 @@ void Player::wait_cond(T t){
 
 void Player::send_message(PlayerSignal sig){
 	signal = sig;
-	queued = true;
-	waiting = true;
 	message.send();
-
-	wait_cond([&](){
-		return queued;
-	});
-
-	waiting = false;
+	message.wait();
 }
 
 void Player::received_message(){
-	wrapper -> signal(signal);
-	queued = false;
+	uv_mutex_lock(&mutex);
 
-	if(waiting)
-		signal_cond();
+	if(wrapper)
+		wrapper -> signal(signal);
+	uv_mutex_unlock(&mutex);
 }
 
 void Player::send_error(int err){
@@ -662,7 +671,6 @@ Player::Player(PlayerWrapper* w) : message(this){
 	total_packets = 0;
 	destroyed = false;
 	running = false;
-	queued = false;
 
 	pipeline = false;
 
@@ -821,6 +829,12 @@ void Player::stop(){
 }
 
 void Player::destroy(){
+	uv_mutex_lock(&mutex);
+
+	wrapper = nullptr;
+
+	uv_mutex_unlock(&mutex);
+
 	destroyed = true;
 
 	if(running)
