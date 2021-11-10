@@ -10,7 +10,7 @@ class Player extends EventEmitter
 
 Instantiate a player
 ```js
-const {AudioPlayer} = require('sange');
+const AudioPlayer = require('sange');
 
 var player = new AudioPlayer();
 
