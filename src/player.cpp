@@ -515,10 +515,10 @@ void Player::run(){
 				send_message(PLAYER_FINISH);
 
 				wait_cond([&](){
-					return !destroyed && !b_stop && !b_seek;
+					return should_run() && !b_seek;
 				});
 
-				if(destroyed || b_stop)
+				if(!should_run())
 					break;
 				continue;
 			}
@@ -589,8 +589,9 @@ void Player::cleanup(){
 }
 
 void Player::player_thread(){
+#ifdef SANGE_DEBUG
 	std::cout << "enter thread" << std::endl;
-
+#endif
 	while(!destroyed){
 		if(b_stop && !b_start){
 			wait_cond([&]{
@@ -612,8 +613,9 @@ void Player::player_thread(){
 	running = false;
 
 	delete this;
-
+#ifdef SANGE_DEBUG
 	std::cout << "exit thread" << std::endl;
+#endif
 }
 
 bool Player::should_run(){
