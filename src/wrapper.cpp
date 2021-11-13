@@ -220,6 +220,9 @@ Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 		player -> destroy();
 		player = nullptr;
 
+		std::vector<uint8_t>().swap(secret_box.secret_key);
+		std::vector<uint8_t>().swap(secret_box.buffer);
+
 		av_packet_free(&packet);
 	}
 
