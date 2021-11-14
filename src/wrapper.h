@@ -5,35 +5,35 @@
 
 class PlayerWrapper;
 
-struct SecretBox{
-	enum{
-		NONE = 0,
-		LITE,
-		SUFFIX,
-		DEFAULT
-	};
-
-	std::vector<uint8_t> secret_key;
-	std::vector<uint8_t> buffer;
-
-	uint8_t nonce_buffer[24];
-	uint8_t random_bytes[24];
-	uint8_t audio_nonce[24];
-
-	unsigned int timestamp;
-	unsigned int nonce;
-
-	int mode;
-	int ssrc;
-	int message_size;
-
-	unsigned short sequence;
-};
-
 #include "player.h"
 
 class PlayerWrapper : public Napi::ObjectWrap<PlayerWrapper>{
 private:
+	struct SecretBox{
+		enum{
+			NONE = 0,
+			LITE,
+			SUFFIX,
+			DEFAULT
+		};
+
+		std::vector<uint8_t> secret_key;
+		std::vector<uint8_t> buffer;
+
+		uint8_t nonce_buffer[24];
+		uint8_t random_bytes[24];
+		uint8_t audio_nonce[24];
+
+		unsigned int timestamp;
+		unsigned int nonce;
+
+		int mode;
+		int ssrc;
+		int message_size;
+
+		unsigned short sequence;
+	};
+
 	Player* player;
 
 	Napi::ObjectReference self;
