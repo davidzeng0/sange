@@ -224,6 +224,9 @@ Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 		std::vector<uint8_t>().swap(secret_box.buffer);
 
 		av_packet_free(&packet);
+
+		self.Reset();
+		buffer.Reset();
 	}
 
 	return info.Env().Undefined();
