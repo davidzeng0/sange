@@ -9,6 +9,7 @@ FFmpeg powered audio player in node.js
 5. libuv <code>sudo apt install libuv1-dev</code>
 6. libopus <code>sudo apt install libopus-dev</code>
 7. libsodium <code>sudo apt install libsodium-dev</code>
+8. libtool (for npm sodium) <code>sudo apt install libtool</code>
 
 ### install
 ```bash
