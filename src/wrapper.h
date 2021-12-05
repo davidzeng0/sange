@@ -110,6 +110,7 @@ public:
 	Napi::Value pipe(const Napi::CallbackInfo& info);
 
 	int process_packet();
+	int send_packet();
 
 	void signal(PlayerSignal signal);
 };

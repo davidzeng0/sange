@@ -572,9 +572,18 @@ void Player::run(){
 
 		total_frames++;
 
-		signal = PLAYER_PACKET;
+		uv_mutex_lock(&mutex);
 
+		if(wrapper)
+			err = wrapper -> send_packet();
+		uv_mutex_unlock(&mutex);
+
+		if(!wrapper)
+			break;
+		if(err)
+			goto end;
 		if(!packet_emit_once || !packet_sent){
+			signal = PLAYER_PACKET;
 			message.send();
 			packet_sent = true;
 		}
