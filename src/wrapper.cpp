@@ -385,6 +385,7 @@ static void write_offset(std::vector<uint8_t>& data, T value, int& offset){
 int PlayerWrapper::process_packet(){
 	if(!player) abort();
 
+	av_packet_unref(packet);
 	av_packet_move_ref(packet, player -> packet);
 
 	if(!secret_box.secret_key.size())
@@ -444,15 +445,6 @@ int PlayerWrapper::process_packet(){
 
 	secret_box.message_size = offset + msg_length + len;
 
-	if(ext_send){
-		av_packet_unref(packet);
-
-		if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
-			if(errno != EAGAIN)
-				err = -errno;
-		}
-	}
-
 	uv_mutex_unlock(&mutex);
 
 	return err;
@@ -460,6 +452,25 @@ int PlayerWrapper::process_packet(){
 	fail:
 
 	return AVERROR_BUFFER_TOO_SMALL;
+}
+
+int PlayerWrapper::send_packet(){
+	if(!ext_send || fd < 0)
+		return 0;
+	if(!player) abort();
+
+	int err = 0;
+
+	uv_mutex_lock(&mutex);
+
+	if(sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
+		if(errno != EAGAIN)
+			err = -errno;
+	}
+
+	uv_mutex_unlock(&mutex);
+
+	return err;
 }
 
 void PlayerWrapper::signal(PlayerSignal signal){
