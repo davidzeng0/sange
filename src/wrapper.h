@@ -47,6 +47,14 @@ private:
 	void handle_error();
 
 	SecretBox secret_box;
+
+	int fd;
+
+	sockaddr* addr;
+	socklen_t addr_len;
+
+	bool ext_send;
+
 	AVPacket* packet;
 
 	uv_mutex_t mutex;
@@ -98,6 +106,8 @@ public:
 	Napi::Value updateSecretBox(const Napi::CallbackInfo& info);
 
 	Napi::Value getSecretBox(const Napi::CallbackInfo& info);
+
+	Napi::Value pipe(const Napi::CallbackInfo& info);
 
 	int process_packet();
 

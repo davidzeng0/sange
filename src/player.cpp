@@ -363,6 +363,8 @@ void Player::run(){
 	int err = AVERROR(ENOMEM);
 	int stream_index;
 
+	bool packet_sent = false;
+
 	timespec sleep, now;
 
 	if(!frame)
@@ -491,6 +493,7 @@ void Player::run(){
 					avcodec_flush_buffers(decoderctx);
 				if(filter_graph && (err = configure_filters()) < 0)
 					goto end;
+				packet_sent = false;
 			}
 		}
 
@@ -498,10 +501,12 @@ void Player::run(){
 			break;
 		if(pause){
 			wait_cond([&]{
-				return pause;
+				return pause && should_run();
 			});
 
 			clock_gettime(CLOCK_MONOTONIC, &sleep);
+
+			packet_sent = false;
 		}
 
 		if(!should_run())
@@ -520,6 +525,8 @@ void Player::run(){
 
 				if(!should_run())
 					break;
+				packet_sent = false;
+
 				continue;
 			}
 
@@ -566,7 +573,11 @@ void Player::run(){
 		total_frames++;
 
 		signal = PLAYER_PACKET;
-		message.send();
+
+		if(!packet_emit_once || !packet_sent){
+			message.send();
+			packet_sent = true;
+		}
 	}
 
 	av_packet_unref(packet);
@@ -694,6 +705,8 @@ Player::Player(PlayerWrapper* w) : message(this){
 
 	frame = nullptr;
 	packet = nullptr;
+
+	packet_emit_once = false;
 
 	audio_out.reset();
 
@@ -840,6 +853,10 @@ void Player::destroy(){
 		signal_cond();
 	else
 		delete this;
+}
+
+void Player::setPacketEmitOnce(bool emit){
+	packet_emit_once = emit;
 }
 
 const PlayerError& Player::getError(){

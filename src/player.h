@@ -276,6 +276,8 @@ private:
 
 	PlayerSignal signal;
 
+	bool packet_emit_once;
+
 	static int decode_interrupt(void* p);
 	static void s_player_thread(void* p);
 
@@ -328,6 +330,8 @@ public:
 
 	void stop();
 	void destroy();
+
+	void setPacketEmitOnce(bool emit);
 
 	const PlayerError& getError();
 
