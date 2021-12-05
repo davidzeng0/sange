@@ -9,7 +9,7 @@ Napi::Object init(Napi::Env env, Napi::Object exports){
 #ifdef SANGE_DEBUG
 	av_log_set_level(AV_LOG_TRACE);
 #else
-	av_log_set_level(AV_LOG_WARNING);
+	av_log_set_level(AV_LOG_FATAL);
 #endif
 	Message::init();
 

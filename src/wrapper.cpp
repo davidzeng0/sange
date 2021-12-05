@@ -3,6 +3,7 @@
 #include <netdb.h>
 #include <sodium/crypto_secretbox.h>
 #include <sodium/randombytes.h>
+#include <arpa/inet.h>
 #include "wrapper.h"
 #include "message.h"
 
@@ -29,7 +30,8 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 		InstanceMethod<&PlayerWrapper::destroy>("destroy"),
 		InstanceMethod<&PlayerWrapper::setSecretBox>("setSecretBox"),
 		InstanceMethod<&PlayerWrapper::updateSecretBox>("updateSecretBox"),
-		InstanceMethod<&PlayerWrapper::getSecretBox>("getSecretBox")
+		InstanceMethod<&PlayerWrapper::getSecretBox>("getSecretBox"),
+		InstanceMethod<&PlayerWrapper::pipe>("pipe")
 	});
 
 	return constructor;
@@ -37,6 +39,9 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 
 PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<PlayerWrapper>(info), self(Napi::Persistent(info.This().As<Napi::Object>())){
 	player = nullptr;
+	addr = nullptr;
+	fd = -1;
+	ext_send = false;
 	packet = av_packet_alloc();
 
 	if(!packet)
@@ -224,6 +229,7 @@ Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 		std::vector<uint8_t>().swap(secret_box.buffer);
 
 		av_packet_free(&packet);
+		free(addr);
 
 		self.Reset();
 		buffer.Reset();
@@ -233,6 +239,8 @@ Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 }
 
 Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
+	checkDestroyed(info.Env());
+
 	Napi::Uint8Array key = info[0].As<Napi::Uint8Array>();
 	Napi::Number mode = info[1].As<Napi::Number>();
 	Napi::Number ssrc = info[2].As<Napi::Number>();
@@ -254,6 +262,77 @@ Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
 	secret_box.sequence = 0;
 	secret_box.timestamp = 0;
 	secret_box.nonce = 0;
+
+	uv_mutex_unlock(&mutex);
+
+	return info.Env().Undefined();
+}
+
+Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
+	checkDestroyed(info.Env());
+
+	int fd = info[0].As<Napi::Number>().Int32Value();
+	int port;
+	std::string ip;
+
+	player -> setPacketEmitOnce(true);
+	ext_send = true;
+
+	if(fd >= 0){
+		ip = info[1].As<Napi::String>().Utf8Value();
+		port = info[2].As<Napi::Number>().Int32Value();
+	}else{
+		this -> fd = -1;
+
+		return info.Env().Undefined();
+	}
+
+	int family;
+
+	union{
+		in_addr in;
+		in6_addr in6;
+	};
+
+	if(inet_pton(AF_INET, ip.c_str(), &in) == 1)
+		family = AF_INET;
+	else if(inet_pton(AF_INET6, ip.c_str(), &in6) == 1)
+		family = AF_INET6;
+	else
+		throw Napi::Error::New(info.Env(), "Invalid IP address");
+	sockaddr* address;
+	socklen_t addresslen;
+
+	if(family == AF_INET){
+		sockaddr_in* inaddr = (sockaddr_in*)calloc(1, sizeof(sockaddr_in));
+
+		if(!inaddr)
+			throw std::bad_alloc();
+		inaddr -> sin_port = htons(port);
+		inaddr -> sin_addr = in;
+		inaddr -> sin_family = AF_INET;
+		address = (sockaddr*)inaddr;
+		addresslen = sizeof(sockaddr_in);
+	}else{
+		sockaddr_in6* in6addr = (sockaddr_in6*)calloc(1, sizeof(sockaddr_in6));
+
+		if(!in6addr)
+			throw std::bad_alloc();
+		in6addr -> sin6_port = htons(port);
+		in6addr -> sin6_addr = in6;
+		in6addr -> sin6_family = AF_INET6;
+		address = (sockaddr*)in6addr;
+		addresslen = sizeof(sockaddr_in6);
+	}
+
+	uv_mutex_lock(&mutex);
+
+	free(addr);
+
+	this -> fd = fd;
+
+	addr = address;
+	addr_len = addresslen;
 
 	uv_mutex_unlock(&mutex);
 
@@ -315,6 +394,7 @@ int PlayerWrapper::process_packet(){
 	int offset = 2,
 		len,
 		msg_length = packet -> size + crypto_secretbox_MACBYTES;
+	int err = 0;
 	uint8_t* nonce;
 
 	uv_mutex_lock(&mutex);
@@ -364,9 +444,18 @@ int PlayerWrapper::process_packet(){
 
 	secret_box.message_size = offset + msg_length + len;
 
+	if(ext_send){
+		av_packet_unref(packet);
+
+		if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
+			if(errno != EAGAIN)
+				err = -errno;
+		}
+	}
+
 	uv_mutex_unlock(&mutex);
 
-	return 0;
+	return err;
 
 	fail:
 
