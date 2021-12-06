@@ -109,6 +109,8 @@ public:
 
 	Napi::Value pipe(const Napi::CallbackInfo& info);
 
+	Napi::Value isCodecCopy(const Napi::CallbackInfo& info);
+
 	int process_packet();
 	int send_packet();
 
