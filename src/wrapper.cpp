@@ -223,6 +223,12 @@ Napi::Value PlayerWrapper::stop(const Napi::CallbackInfo& info){
 
 Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
 	if(player){
+		uv_mutex_lock(&mutex);
+
+		fd = -1;
+
+		uv_mutex_unlock(&mutex);
+
 		player -> destroy();
 		player = nullptr;
 
@@ -462,7 +468,7 @@ int PlayerWrapper::process_packet(){
 }
 
 int PlayerWrapper::send_packet(){
-	if(!ext_send || fd < 0)
+	if(!ext_send)
 		return 0;
 	if(!player) abort();
 
@@ -470,9 +476,13 @@ int PlayerWrapper::send_packet(){
 
 	uv_mutex_lock(&mutex);
 
-	if(sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
-		if(errno != EAGAIN)
-			err = -errno;
+	if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
+		if(errno != EAGAIN){
+			if(errno == EBADF)
+				fd = -1;
+			else
+				err = -errno;
+		}
 	}
 
 	uv_mutex_unlock(&mutex);
