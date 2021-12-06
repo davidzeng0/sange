@@ -332,6 +332,7 @@ public:
 	void destroy();
 
 	void setPacketEmitOnce(bool emit);
+	bool isCodecCopy();
 
 	const PlayerError& getError();
 

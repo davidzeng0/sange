@@ -31,7 +31,8 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 		InstanceMethod<&PlayerWrapper::setSecretBox>("setSecretBox"),
 		InstanceMethod<&PlayerWrapper::updateSecretBox>("updateSecretBox"),
 		InstanceMethod<&PlayerWrapper::getSecretBox>("getSecretBox"),
-		InstanceMethod<&PlayerWrapper::pipe>("pipe")
+		InstanceMethod<&PlayerWrapper::pipe>("pipe"),
+		InstanceMethod<&PlayerWrapper::isCodecCopy>("isCodecCopy")
 	});
 
 	return constructor;
@@ -363,6 +364,12 @@ Napi::Value PlayerWrapper::getSecretBox(const Napi::CallbackInfo& info){
 	box["sequence"] = secret_box.sequence;
 
 	return box;
+}
+
+Napi::Value PlayerWrapper::isCodecCopy(const Napi::CallbackInfo& info){
+	checkDestroyed(info.Env());
+
+	return Napi::Boolean::New(info.Env(), player -> isCodecCopy());
 }
 
 template<class T>

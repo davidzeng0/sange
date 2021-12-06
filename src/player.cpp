@@ -459,13 +459,13 @@ void Player::run(){
 		time_start = 0;
 	if(stream -> codecpar -> codec_id != PLAYER_OUTPUT_CODEC && (err = init_pipeline()) < 0)
 		goto end;
-	send_message(PLAYER_READY);
-	clock_gettime(CLOCK_MONOTONIC, &sleep);
-
 	audio_in.reset();
 	decoder_has_data = false;
 	encoder_has_data = false;
 	filter_has_data = false;
+
+	send_message(PLAYER_READY);
+	clock_gettime(CLOCK_MONOTONIC, &sleep);
 
 	while(should_run()){
 		if(b_bitrate){
@@ -866,6 +866,10 @@ void Player::destroy(){
 
 void Player::setPacketEmitOnce(bool emit){
 	packet_emit_once = emit;
+}
+
+bool Player::isCodecCopy(){
+	return !pipeline;
 }
 
 const PlayerError& Player::getError(){
