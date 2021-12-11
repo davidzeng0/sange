@@ -1,16 +1,64 @@
-#include <iostream>
 #include <time.h>
 #include <unistd.h>
 #include <opus/opus.h>
-#include <pthread.h>
 #include "player.h"
-#include "message.h"
 
-const static int PLAYER_OUTPUT_CODEC = AV_CODEC_ID_OPUS;
+void PlayerContext::add(Player* player){
+	mutex.lock();
 
-PlayerException::PlayerException(const char* _error, int _code){
-	error = _error;
-	code = _code;
+	if(list)
+		list -> prev = player;
+	player -> next = list;
+	player -> prev = nullptr;
+	list = player;
+
+	mutex.unlock();
+}
+
+void PlayerContext::remove(Player* player){
+	mutex.lock();
+
+	if(player == list || player -> prev){
+		player -> thread.detach();
+
+		if(player == list){
+			list = player -> next;
+
+			if(list)
+				list -> prev = nullptr;
+		}else{
+			player -> prev -> next = player -> next;
+
+			if(player -> next)
+				player -> next -> prev = player -> prev;
+		}
+	}
+
+	mutex.unlock();
+}
+
+void PlayerContext::wait_threads(){
+	Player* player;
+	Thread thread;
+
+	while(true){
+		player = nullptr;
+		mutex.lock();
+		player = list;
+
+		if(player){
+			list = player -> next;
+			player -> prev = nullptr;
+			player -> next = nullptr;
+			thread = player -> thread;
+		}
+
+		mutex.unlock();
+
+		if(!player)
+			break;
+		thread.join();
+	}
 }
 
 int Player::decode_interrupt(void* p){
@@ -94,7 +142,7 @@ int Player::init_pipeline(){
 	return err;
 }
 
-void Player::pipeline_deinit(){
+void Player::pipeline_destroy(){
 	avfilter_graph_free(&filter_graph);
 	avcodec_free_context(&decoderctx);
 	avcodec_free_context(&encoderctx);
@@ -161,21 +209,27 @@ int Player::configure_filters(){
 		inputs -> pad_idx = 0;
 		inputs -> next = nullptr;
 
-		uv_mutex_lock(&mutex);
+		if(!outputs -> name || !inputs -> name){
+			ret = AVERROR(ENOMEM);
+
+			goto failgraph;
+		}
+
+		mutex.lock();
 
 		ret = 0;
 
 		try{
 			std::string filter("");
 
-			if(volume.is_set())
-				filter += "," + volume.to_string(audio_in, audio_out);
 			if(rate.is_set())
 				filter += "," + rate.to_string(audio_in, audio_out);
 			if(tempo.is_set())
 				filter += "," + tempo.to_string(audio_in, audio_out);
 			if(tremolo.is_set())
 				filter += "," + tremolo.to_string(audio_in, audio_out);
+			if(volume.is_set())
+				filter += "," + volume.to_string(audio_in, audio_out);
 			if(equalizer.is_set())
 				filter += "," + equalizer.to_string(audio_in, audio_out);
 			ret = avfilter_graph_parse_ptr(filter_graph, filter.c_str() + 1, &inputs, &outputs, nullptr);
@@ -183,7 +237,7 @@ int Player::configure_filters(){
 			ret = AVERROR(ENOMEM);
 		}
 
-		uv_mutex_unlock(&mutex);
+		mutex.unlock();
 
 		if(ret < 0)
 			goto failgraph;
@@ -314,33 +368,35 @@ int Player::read_packet(){
 		time = (double)packet -> pts / stream -> time_base.den;
 		time -= time_start;
 
-		bool uninit_pipeline = false;
+		bool destroy_pipeline = false;
 
 		if(filters_set()){
 			if(!pipeline && (err = init_pipeline()) < 0)
 				return err;
 		}else{
-			if(pipeline && stream -> codecpar -> codec_id == PLAYER_OUTPUT_CODEC)
-				uninit_pipeline = true;
+			if(pipeline && stream -> codecpar -> codec_id == encoder_id)
+				destroy_pipeline = true;
 		}
 
-		if(!pipeline || uninit_pipeline){
-			int sample_rate = 48000, /* opus is always 48KHz */
-				channels = opus_packet_get_nb_channels(packet -> data),
-				samples = opus_packet_get_samples_per_frame(packet -> data, sample_rate);
-			if(samples == OPUS_INVALID_PACKET)
-				return AVERROR(EINVAL);
-			if(channels == audio_out.channels && sample_rate == audio_out.sample_rate)
-				packet -> duration = samples;
-			else{
-				uninit_pipeline = false;
+		if(!pipeline || destroy_pipeline){
+			if(encoder_id == AV_CODEC_ID_OPUS){
+				int sample_rate = 48000, /* opus is always 48KHz */
+					channels = opus_packet_get_nb_channels(packet -> data),
+					samples = opus_packet_get_samples_per_frame(packet -> data, sample_rate);
+				if(samples == OPUS_INVALID_PACKET)
+					return AVERROR_INVALIDDATA;
+				if(channels == audio_out.channels && sample_rate == audio_out.sample_rate)
+					packet -> duration = samples;
+				else{
+					destroy_pipeline = false;
 
-				if(!pipeline && (err = init_pipeline()) < 0)
-					return err;
+					if(!pipeline && (err = init_pipeline()) < 0)
+						return err;
+				}
 			}
 
-			if(uninit_pipeline)
-				pipeline_deinit();
+			if(destroy_pipeline)
+				pipeline_destroy();
 			if(!pipeline)
 				break;
 		}
@@ -362,8 +418,6 @@ void Player::run(){
 
 	int err = AVERROR(ENOMEM);
 	int stream_index;
-
-	bool packet_sent = false;
 
 	timespec sleep, now;
 
@@ -389,15 +443,13 @@ void Player::run(){
 		goto end;
 	if((err = av_dict_set(&options, "reconnect", "1", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
-	// av_dict_set(&options, "reconnect_at_eof", "1", AV_DICT_MATCH_CASE);
 	if((err = av_dict_set(&options, "reconnect_on_network_error", "1", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
-	// av_dict_set(&options, "reconnect_on_http_error", "1", AV_DICT_MATCH_CASE);
 	if((err = av_dict_set(&options, "reconnect_delay_max", "2", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
 	if((err = av_dict_set(&options, "icy", "0", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
-	error.error.clear();
+	error.str.clear();
 	err = avformat_open_input(&format_ctx, url.c_str(), nullptr, &options);
 
 	av_dict_free(&options);
@@ -405,11 +457,11 @@ void Player::run(){
 	if(err){
 		switch(err){
 			case AVERROR(EINVAL):
-				error.error += "Invalid input file";
+				error.str += "Invalid input file";
 
 				break;
 			case AVERROR(EIO):
-				error.error += "Could not open input file";
+				error.str += "Could not open input file";
 
 				break;
 			default:
@@ -418,9 +470,7 @@ void Player::run(){
 
 		error.code = err;
 
-		send_message(PLAYER_ERROR);
-
-		return;
+		goto err;
 	}
 
 	for(int i = 0; i < format_ctx -> nb_streams; i++){
@@ -457,14 +507,19 @@ void Player::run(){
 		time_start = (double)format_ctx -> start_time / AV_TIME_BASE;
 	else
 		time_start = 0;
-	if(stream -> codecpar -> codec_id != PLAYER_OUTPUT_CODEC && (err = init_pipeline()) < 0)
+	if(stream -> codecpar -> codec_id != encoder_id && (err = init_pipeline()) < 0)
 		goto end;
 	audio_in.reset();
 	decoder_has_data = false;
 	encoder_has_data = false;
 	filter_has_data = false;
 
-	send_message(PLAYER_READY);
+	err = callback_wrap([&]{
+		return callbacks -> ready(this);
+	});
+
+	if(err)
+		return;
 	clock_gettime(CLOCK_MONOTONIC, &sleep);
 
 	while(should_run()){
@@ -484,49 +539,54 @@ void Player::run(){
 		if(b_seek){
 			int64_t time;
 
-			time = (int64_t)((seek_to + time_start) * (double)stream -> time_base.den);
+			time = (int64_t)((seek_to + time_start) * stream -> time_base.den);
 			err = avformat_seek_file(format_ctx, stream_index, time - 1, time, time + 1, 0);
 			b_seek = false;
 
+			if(!should_run())
+				break;
 			if(!err){
+				err = callback_wrap([&]{
+					return callbacks -> seeked(this);
+				});
+
+				if(err)
+					break;
 				if(pipeline)
 					avcodec_flush_buffers(decoderctx);
 				if(filter_graph && (err = configure_filters()) < 0)
 					goto end;
-				packet_sent = false;
 			}
 		}
 
-		if(!should_run())
-			break;
-		if(pause){
+		if(b_pause){
 			wait_cond([&]{
-				return pause && should_run();
+				return b_pause && should_run();
 			});
 
+			if(!should_run())
+				break;
 			clock_gettime(CLOCK_MONOTONIC, &sleep);
-
-			packet_sent = false;
 		}
 
-		if(!should_run())
-			break;
 		err = read_packet();
 
 		if(!should_run())
 			break;
 		if(err < 0){
 			if(err == AVERROR_EOF){
-				send_message(PLAYER_FINISH);
+				err = callback_wrap([&]{
+					return callbacks -> finish(this);
+				});
 
+				if(err)
+					break;
 				wait_cond([&](){
 					return should_run() && !b_seek;
 				});
 
 				if(!should_run())
 					break;
-				packet_sent = false;
-
 				continue;
 			}
 
@@ -535,23 +595,25 @@ void Player::run(){
 			goto end;
 		}
 
-		message.wait();
+		long dur = packet -> duration,
+			den = pipeline ? encoderctx -> time_base.den : audio_out.sample_rate;
+		if(dur < 0)
+			dur = 0; /* should never happen but just in case */
+		if(den <= 0){
+			error.str += "Fatal error: den <= 0";
+			err = AVERROR_EXIT;
 
-		if(!should_run())
-			break;
-		int64_t dur = packet -> duration;
-		int den = pipeline ? encoderctx -> time_base.den : audio_out.sample_rate;
+			goto err;
+		}
 
-		uv_mutex_lock(&mutex);
+		err = callback_wrap([&]{
+			return callbacks -> packet(this, packet);
+		});
 
-		if(wrapper)
-			err = wrapper -> process_packet();
-		uv_mutex_unlock(&mutex);
+		av_packet_unref(packet);
 
-		if(!wrapper)
-			break;
 		if(err)
-			goto end;
+			break;
 		sleep.tv_nsec += dur * 1'000'000'000 / den;
 
 		if(sleep.tv_nsec > 1'000'000'000){
@@ -564,54 +626,70 @@ void Player::run(){
 		if(now.tv_sec > sleep.tv_sec || (now.tv_sec == sleep.tv_sec && now.tv_nsec > sleep.tv_nsec)){
 			unsigned long time = (now.tv_sec - sleep.tv_sec) * 1'000'000'000 + now.tv_nsec - sleep.tv_nsec;
 
-			dropped_frames += time * den / (dur * 1'000'000'000);
+			dropped_samples += time * den / 1'000'000'000;
 			sleep = now;
 		}else{
-			clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep, nullptr);
+			mutex.lock();
+			cond.wait(mutex, sleep);
+			mutex.unlock();
+
+			if(!should_run())
+				break;
 		}
 
-		total_frames++;
+		total_samples += dur;
+		total_packets++;
+		err = callback_wrap([&]{
+			return callbacks -> send_packet(this);
+		});
 
-		uv_mutex_lock(&mutex);
-
-		if(wrapper)
-			err = wrapper -> send_packet();
-		uv_mutex_unlock(&mutex);
-
-		if(!wrapper)
+		if(err == AVERROR(EAGAIN))
+			dropped_samples += dur;
+		else if(err)
 			break;
-		if(err)
-			goto end;
-		if(!packet_emit_once || !packet_sent){
-			signal = PLAYER_PACKET;
-			message.send();
-			packet_sent = true;
-		}
 	}
-
-	av_packet_unref(packet);
 
 	return;
 
 	end:
 
-	if(err)
-		send_error(err);
-	return;
+	if(!err)
+		return;
+	else{
+		char errbuf[128];
+
+		av_strerror(err, errbuf, sizeof(errbuf));
+
+		error.str += errbuf;
+		error.code = err;
+	}
+
+	err:
+
+	callback_wrap([&]{
+		callbacks -> error(this, error.str, error.code);
+
+		return 0;
+	}, false);
 }
 
+template<class T>
+int Player::callback_wrap(T t, bool run){
+	if((run && !should_run()) || destroyed)
+		return AVERROR_EXIT;
+	else
+		return t();
+}
 
 void Player::cleanup(){
 	avformat_close_input(&format_ctx);
-	avfilter_graph_free(&filter_graph);
-	avcodec_free_context(&encoderctx);
-	avcodec_free_context(&decoderctx);
+	pipeline_destroy();
+
+	if(packet)
+		av_packet_unref(packet);
 }
 
 void Player::player_thread(){
-#ifdef SANGE_DEBUG
-	std::cout << "enter thread" << std::endl;
-#endif
 	while(!destroyed){
 		if(b_stop && !b_start){
 			wait_cond([&]{
@@ -628,14 +706,12 @@ void Player::player_thread(){
 		b_start = false;
 	}
 
-	message.wait();
-
+	mutex.lock();
 	running = false;
+	mutex.unlock();
+	context -> remove(this);
 
 	delete this;
-#ifdef SANGE_DEBUG
-	std::cout << "exit thread" << std::endl;
-#endif
 }
 
 bool Player::should_run(){
@@ -643,50 +719,33 @@ bool Player::should_run(){
 }
 
 void Player::signal_cond(){
-	uv_mutex_lock(&mutex);
-	uv_cond_signal(&cond);
-	uv_mutex_unlock(&mutex);
+	mutex.lock();
+	cond.signal();
+	mutex.unlock();
 }
 
 template<class T>
 void Player::wait_cond(T t){
-	uv_mutex_lock(&mutex);
+	mutex.lock();
 
 	while(t())
-		uv_cond_wait(&cond, &mutex);
-	uv_mutex_unlock(&mutex);
+		cond.wait(mutex);
+	mutex.unlock();
 }
 
-void Player::send_message(PlayerSignal sig){
-	signal = sig;
-	message.send();
-	message.wait();
-}
+Player::Player(PlayerContext* ctx, PlayerCallbacks* c, void* d): cond(CLOCK_MONOTONIC), thread(s_player_thread, this){
+	context = ctx;
+	next = nullptr;
+	prev = nullptr;
 
-void Player::received_message(){
-	if(wrapper)
-		wrapper -> signal(signal);
-}
-
-void Player::send_error(int err){
-	char errbuf[128];
-
-	av_strerror(err, errbuf, sizeof(errbuf));
-
-	error.error = errbuf;
-	error.code = err;
-
-	send_message(PLAYER_ERROR);
-}
-
-Player::Player(PlayerWrapper* w) : message(this){
-	wrapper = w;
+	callbacks = c;
+	data = d;
 
 	time = 0;
 	time_start = 0;
 	duration = 0;
-	dropped_frames = 0;
-	total_frames = 0;
+	dropped_samples = 0;
+	total_samples = 0;
 	total_packets = 0;
 	destroyed = false;
 	running = false;
@@ -695,7 +754,7 @@ Player::Player(PlayerWrapper* w) : message(this){
 
 	b_stop = false;
 	b_start = false;
-	pause = false;
+	b_pause = false;
 	b_seek = false;
 	b_bitrate = false;
 	bitrate = 0;
@@ -707,50 +766,43 @@ Player::Player(PlayerWrapper* w) : message(this){
 	filter_sink = nullptr;
 	stream = nullptr;
 
-	encoder = avcodec_find_encoder(AV_CODEC_ID_OPUS);
-
 	decoderctx = nullptr;
 	encoderctx = nullptr;
 
 	frame = nullptr;
 	packet = nullptr;
 
-	packet_emit_once = false;
-
 	audio_out.reset();
 
-	error.error.reserve(256);
-
-	uv_cond_init(&cond);
-	uv_mutex_init(&mutex);
+	error.str.reserve(256);
 }
 
-void Player::start(){
+int Player::start(){
 	if(running){
 		b_start = true;
 
 		signal_cond();
 
-		return;
+		return 0;
 	}
 
-	int err;
-
-	err = message.async_init();
+	int err = thread.start();
 
 	if(err)
-		throw PlayerException("Could not create thread communicator", err);
-	err = uv_thread_create(&thread, s_player_thread, this);
-
-	if(err)
-		throw PlayerException("Could not create thread", err);
-	pthread_detach(thread);
-
+		return err;
+	context -> add(this);
 	running = true;
+
+	return 0;
 }
 
 void Player::setURL(std::string _url){
 	url = _url;
+}
+
+void Player::setOutputCodec(AVCodecID id){
+	encoder_id = id;
+	encoder = avcodec_find_encoder(encoder_id);
 }
 
 void Player::setFormat(int channels, int sample_rate, int brate){
@@ -769,12 +821,12 @@ double Player::getDuration(){
 	return duration;
 }
 
-long Player::getDroppedFrames(){
-	return dropped_frames;
+long Player::getDroppedSamples(){
+	return dropped_samples;
 }
 
-long Player::getTotalFrames(){
-	return total_frames;
+long Player::getTotalSamples(){
+	return total_samples;
 }
 
 long Player::getTotalPackets(){
@@ -782,7 +834,7 @@ long Player::getTotalPackets(){
 }
 
 void Player::setPaused(bool paused){
-	pause = paused;
+	b_pause = paused;
 
 	if(!paused)
 		signal_cond();
@@ -801,48 +853,46 @@ void Player::seek(double time){
 }
 
 void Player::setBitrate(int bt){
-	b_bitrate = true;
 	bitrate = bt;
+	b_bitrate = true;
 }
 
 void Player::setVolume(float v){
-	uv_mutex_lock(&mutex);
-
+	mutex.lock();
 	volume.set(v);
-
-	uv_mutex_unlock(&mutex);
+	mutex.unlock();
 }
 
 void Player::setRate(float r){
-	uv_mutex_lock(&mutex);
-
+	mutex.lock();
 	rate.set(r);
-
-	uv_mutex_unlock(&mutex);
+	mutex.unlock();
 }
 
 void Player::setTempo(float t){
-	uv_mutex_lock(&mutex);
-
+	mutex.lock();
 	tempo.set(t);
-
-	uv_mutex_unlock(&mutex);
+	mutex.unlock();
 }
 
 void Player::setTremolo(float depth, float rate){
-	uv_mutex_lock(&mutex);
-
+	mutex.lock();
 	tremolo.set(depth, rate);
-
-	uv_mutex_unlock(&mutex);
+	mutex.unlock();
 }
 
 void Player::setEqualizer(Equalizer* eqs, size_t length){
-	uv_mutex_lock(&mutex);
+	mutex.lock();
 
-	equalizer.set(eqs, length);
+	try{
+		equalizer.set(eqs, length);
+	}catch(...){
+		mutex.unlock();
 
-	uv_mutex_unlock(&mutex);
+		throw;
+	}
+
+	mutex.unlock();
 }
 
 void Player::stop(){
@@ -850,30 +900,27 @@ void Player::stop(){
 }
 
 void Player::destroy(){
-	uv_mutex_lock(&mutex);
+	bool free = false;
 
-	wrapper = nullptr;
+	mutex.lock();
 
-	uv_mutex_unlock(&mutex);
+	if(!destroyed){
+		destroyed = true;
 
-	destroyed = true;
+		if(running)
+			cond.signal();
+		else
+			free = true;
+	}
 
-	if(running)
-		signal_cond();
-	else
+	mutex.unlock();
+
+	if(free)
 		delete this;
-}
-
-void Player::setPacketEmitOnce(bool emit){
-	packet_emit_once = emit;
 }
 
 bool Player::isCodecCopy(){
 	return !pipeline;
-}
-
-const PlayerError& Player::getError(){
-	return error;
 }
 
 Player::~Player(){

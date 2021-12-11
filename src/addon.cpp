@@ -1,7 +1,6 @@
 #include <napi.h>
 #include "wrapper.h"
 #include "ffmpeg.h"
-#include "message.h"
 
 Napi::Object init(Napi::Env env, Napi::Object exports){
 	avformat_network_init();
@@ -11,8 +10,6 @@ Napi::Object init(Napi::Env env, Napi::Object exports){
 #else
 	av_log_set_level(AV_LOG_FATAL);
 #endif
-	Message::init();
-
 	exports = PlayerWrapper::init(env);
 
 	return exports;

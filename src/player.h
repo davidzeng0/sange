@@ -1,30 +1,16 @@
 #pragma once
 #include <string>
-#include <uv.h>
-#include <exception>
-
-class PlayerException;
-class Player;
-
-enum PlayerSignal{
-	PLAYER_NONE   = 0x0,
-	PLAYER_READY  = 0x1,
-	PLAYER_PACKET = 0x2,
-	PLAYER_FINISH = 0x4,
-	PLAYER_ERROR  = 0x8
-};
-
-#include "message.h"
 #include "ffmpeg.h"
-#include "wrapper.h"
+#include "thread.h"
 
-class PlayerException : public std::exception{
-public:
-	const char* error;
-
-	int code;
-
-	PlayerException(const char* error, int code);
+class Player;
+struct PlayerCallbacks{
+	int (*ready)(Player* player);
+	int (*seeked)(Player* player);
+	int (*packet)(Player* player, AVPacket* packet);
+	int (*send_packet)(Player* player);
+	int (*finish)(Player* player);
+	void (*error)(Player* player, const std::string& error, int code);
 };
 
 struct AudioFormat{
@@ -202,22 +188,36 @@ public:
 	}
 };
 
-struct PlayerError{
-	std::string error;
+class PlayerContext{
+private:
+	Player* list;
+	Mutex mutex;
 
-	int code;
+	void add(Player* player);
+	void remove(Player* player);
+
+	friend class Player;
+public:
+	void wait_threads();
 };
 
 class Player{
 private:
-	PlayerWrapper* wrapper;
+	Player* next;
+	Player* prev;
+	PlayerContext* context;
 
-	Message message;
-	PlayerError error;
+	PlayerCallbacks* callbacks;
 
-	uv_thread_t thread;
-	uv_cond_t cond;
-	uv_mutex_t mutex;
+	struct PlayerError{
+		std::string str;
+
+		int code;
+	} error;
+
+	Thread thread;
+	Cond cond;
+	Mutex mutex;
 
 	std::string url;
 
@@ -228,7 +228,7 @@ private:
 
 	bool b_stop;
 	bool b_start;
-	bool pause;
+	bool b_pause;
 	bool b_seek;
 	bool b_bitrate;
 	int bitrate;
@@ -237,14 +237,15 @@ private:
 	double time;
 	double time_start;
 	double duration;
-	long dropped_frames;
-	long total_frames;
+	long dropped_samples;
+	long total_samples;
 	long total_packets;
 
 	AudioFormat audio_in, audio_out;
 
 	AVFormatContext* format_ctx;
 	AVStream* stream;
+	AVPacket* packet;
 
 	AVFilterGraph* filter_graph;
 	AVFilterContext* filter_src;
@@ -264,6 +265,8 @@ private:
 	AVCodecContext* encoderctx;
 	AVFrame* frame;
 
+	AVCodecID encoder_id;
+
 	const AVCodec* encoder;
 	const AVCodec* decoder;
 
@@ -274,10 +277,6 @@ private:
 	int64_t last_pts;
 	AVRational last_tb;
 
-	PlayerSignal signal;
-
-	bool packet_emit_once;
-
 	static int decode_interrupt(void* p);
 	static void s_player_thread(void* p);
 
@@ -285,7 +284,7 @@ private:
 	bool filters_set();
 	void filters_seteq();
 	int init_pipeline();
-	void pipeline_deinit();
+	void pipeline_destroy();
 	int configure_filters();
 	int read_packet();
 	void run();
@@ -295,27 +294,31 @@ private:
 
 	template<class T>
 	void wait_cond(T t);
-
 	void signal_cond();
-	void send_message(PlayerSignal signal);
-	void send_error(int err);
-	void received_message();
 
-	friend class Message;
+	template<class T>
+	int callback_wrap(T t, bool run = true);
+
+	~Player();
+
+	friend class PlayerContext;
 public:
-	AVPacket* packet;
+	Mutex data_mutex;
 
-	Player(PlayerWrapper* wrapper);
+	void* data; /* user data ptr */
 
-	void start();
+	Player(PlayerContext* context, PlayerCallbacks* callbacks, void* data);
+
+	int start();
 
 	void setURL(std::string url);
+	void setOutputCodec(AVCodecID codec);
 	void setFormat(int channels, int sample_rate, int bitrate);
 
 	double getTime();
 	double getDuration();
-	long getDroppedFrames();
-	long getTotalFrames();
+	long getDroppedSamples();
+	long getTotalSamples();
 	long getTotalPackets();
 
 	void setPaused(bool paused);
@@ -331,10 +334,5 @@ public:
 	void stop();
 	void destroy();
 
-	void setPacketEmitOnce(bool emit);
 	bool isCodecCopy();
-
-	const PlayerError& getError();
-
-	~Player();
 };

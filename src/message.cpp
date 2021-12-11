@@ -1,151 +1,174 @@
-#include <stdexcept>
 #include "wrapper.h"
-#include "player.h"
 #include "message.h"
 
-static uv_async_t* async = nullptr;
-static Message* message_head = nullptr;
-static uv_mutex_t mutex;
-static uv_cond_t cond;
-
-static uv_mutex_t wait_mutex;
-static uv_cond_t wait_cond;
-
-static ulong num_players = 0;
-
-static bool active = false;
-
-static void close_cb(uv_handle_t* handle){
-	free(handle);
-}
-
-void Message::async_cb(uv_async_t* async){
+void MessageContext::async_cb(uv_async_t* async){
 	Message* msg, *next;
+	MessageContext* ctx = (MessageContext*)async -> data;
 
-	uv_mutex_lock(&mutex);
-
-	msg = message_head;
-	active = false;
-	message_head = nullptr;
-
-	uv_mutex_unlock(&mutex);
-
-	if(!msg){
-		uv_close((uv_handle_t*)async, close_cb);
-
-		return;
-	}
+	ctx -> mutex.lock();
+	msg = ctx -> message_head;
+	ctx -> active = false;
+	ctx -> message_head = nullptr;
+	ctx -> mutex.unlock();
 
 	while(msg){
 		for(int i = 0; i < 10000 && msg; i++){
-			next = msg -> m_next;
+			next = msg -> next;
+			msg -> prev = nullptr;
+			msg -> next = nullptr;
 			msg -> received();
 			msg = next;
 		}
 
-		uv_mutex_lock(&wait_mutex);
-		uv_cond_broadcast(&wait_cond);
-		uv_mutex_unlock(&wait_mutex);
+		ctx -> wait_mutex.lock();
+		ctx -> wait_cond.broadcast();
+		ctx -> wait_mutex.unlock();
 	}
 }
 
-void Message::init(){
-	uv_mutex_init(&mutex);
-	uv_cond_init(&cond);
-	uv_mutex_init(&wait_mutex);
-	uv_cond_init(&wait_cond);
-}
+int MessageContext::inc(Message* message){
+	int err;
 
-int Message::inc(){
-	int err = 0;
-
-	uv_mutex_lock(&mutex);
-
-	if(!num_players){
+	if(active_messages + 1 == 0)
+		return UV_ENOMEM;
+	if(!active_messages){
 		async = (uv_async_t*)calloc(1, sizeof(uv_async_t));
 
 		if(!async)
-			err = UV_ENOMEM;
-		else
-			err = uv_async_init(uv_default_loop(), async, async_cb);
+			return UV_ENOMEM;
+		async -> data = this;
+		err = uv_async_init(loop, async, async_cb);
+
+		if(err){
+			free(async);
+
+			return err;
+		}
 	}
 
-	if(!err)
-		num_players++;
-	uv_mutex_unlock(&mutex);
-
-	return err;
-}
-
-void Message::dec(){
-	uv_mutex_lock(&mutex);
-
-	num_players--;
-
-	if(!num_players){
-		uv_async_send(async);
-
-		async = nullptr;
-	}
-
-	uv_mutex_unlock(&mutex);
-}
-
-Message::Message(Player* p){
-	player = p;
-	initialized = false;
-	sending = false;
-}
-
-int Message::async_init(){
-	int err = inc();
-
-	if(err)
-		return err;
-	initialized = true;
+	active_messages++;
 
 	return 0;
 }
 
-void Message::send(){
-	bool send = false;
+void MessageContext::dec(Message* message){
+	if(message -> sending){
+		message -> sending = false;
 
-	wait();
+		mutex.lock();
 
-	sending = true;
+		if(message == message_head){
+			message_head = message -> next;
 
-	uv_mutex_lock(&mutex);
+			if(message_head)
+				message_head -> prev = nullptr;
+		}else if(message -> prev){
+			message -> prev -> next = message -> next;
 
-	m_next = message_head;
-	message_head = this;
+			if(message -> next)
+				message -> next -> prev = message -> prev;
+		}
 
-	if(!active){
-		active = true;
-		send = true;
+		mutex.unlock();
+
+		wakeup(message);
 	}
 
-	uv_mutex_unlock(&mutex);
+	if(--active_messages)
+		return;
+	if(async){
+		mutex.lock();
 
-	if(send)
-		uv_async_send(async);
+		uv_close((uv_handle_t*)async, nullptr);
+
+		async = nullptr;
+		mutex.unlock();
+	}
+}
+
+void MessageContext::send(Message* message){
+	mutex.lock();
+
+	if(async){
+		if(message_head)
+			message_head -> prev = message;
+		message -> next = message_head;
+		message_head = message;
+		message -> sending = true;
+
+		if(!active){
+			active = true;
+
+			uv_async_send(async);
+		}
+	}
+
+	mutex.unlock();
+}
+
+void MessageContext::wait(Message* message){
+	wait_mutex.lock();
+
+	while(message -> sending)
+		wait_cond.wait(wait_mutex);
+	wait_mutex.unlock();
+}
+
+void MessageContext::wakeup(Message* message){
+	wait_mutex.lock();
+	wait_cond.broadcast();
+	wait_mutex.unlock();
+}
+
+ulong MessageContext::count(){
+	return active_messages;
+}
+
+MessageContext::MessageContext(uv_loop_t* l){
+	loop = l;
+}
+
+Message::Message(MessageHandler* h, MessageContext* c){
+	handler = h;
+	context = c;
+	initialized = false;
+	sending = false;
+	next = nullptr;
+	prev = nullptr;
+}
+
+int Message::init(){
+	if(initialized)
+		return 0;
+	int err = context -> inc(this);
+
+	if(!err)
+		initialized = true;
+	return err;
+}
+
+void Message::destroy(){
+	if(initialized){
+		context -> dec(this);
+		initialized = false;
+	}
+}
+
+void Message::send(){
+	context -> send(this);
 }
 
 void Message::wait(){
 	if(!sending)
 		return;
-	uv_mutex_lock(&wait_mutex);
-
-	while(sending)
-		uv_cond_wait(&wait_cond, &wait_mutex);
-	uv_mutex_unlock(&wait_mutex);
+	context -> wait(this);
 }
 
 void Message::received(){
-	player -> received_message();
+	handler -> handle_message();
 	sending = false;
 }
 
 Message::~Message(){
-	if(initialized)
-		dec();
+	destroy();
 }

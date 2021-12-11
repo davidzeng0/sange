@@ -6,8 +6,11 @@
 class PlayerWrapper;
 
 #include "player.h"
+#include "message.h"
+#include "thread.h"
 
-class PlayerWrapper : public Napi::ObjectWrap<PlayerWrapper>{
+class AddonContext;
+class PlayerWrapper : public Napi::ObjectWrap<PlayerWrapper>, public MessageHandler{
 private:
 	struct SecretBox{
 		enum{
@@ -44,7 +47,17 @@ private:
 	void handle_ready();
 	void handle_packet();
 	void handle_finish();
-	void handle_error();
+	void handle_error(std::string& str, int err_code);
+	void do_destroy();
+
+	static int player_ready(Player* player);
+	static int player_seeked(Player* player);
+	static int player_packet(Player* player, AVPacket* packet);
+	static int player_send_packet(Player* player);
+	static int player_finish(Player* player);
+	static void player_error(Player* player, const std::string& error, int code);
+
+	static PlayerCallbacks callbacks;
 
 	SecretBox secret_box;
 
@@ -53,11 +66,27 @@ private:
 	sockaddr* addr;
 	socklen_t addr_len;
 
+	std::string error;
+	int error_code;
+
 	bool ext_send;
+	bool packet_emitted;
 
 	AVPacket* packet;
 
-	uv_mutex_t mutex;
+	Mutex mutex;
+	Mutex secretbox;
+	AddonContext* context;
+	Message message;
+
+	int message_type;
+
+	int process_packet(AVPacket* packet);
+	int send_packet();
+	int send_message(int type);
+	void handle_message();
+
+	friend class Message;
 public:
 	static Napi::Function init(Napi::Env env);
 
@@ -111,8 +140,5 @@ public:
 
 	Napi::Value isCodecCopy(const Napi::CallbackInfo& info);
 
-	int process_packet();
-	int send_packet();
-
-	void signal(PlayerSignal signal);
+	Napi::Value send(const Napi::CallbackInfo& info);
 };

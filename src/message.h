@@ -1,32 +1,61 @@
 #pragma once
-#include <napi.h>
 #include <uv.h>
-#include "ffmpeg.h"
+#include "thread.h"
+
+class MessageHandler{
+public:
+	virtual void handle_message() = 0;
+};
 
 class Message;
+class MessageContext{
+private:
+	uv_async_t* async;
+	uv_loop_t* loop;
+	Message* message_head;
 
-#include "player.h"
+	Mutex mutex;
+	Cond cond;
+	Mutex wait_mutex;
+	Cond wait_cond;
+
+	ulong active_messages;
+
+	bool active;
+
+	static void async_cb(uv_async_t* async);
+	int inc(Message* message);
+	void dec(Message* message);
+	void send(Message* message);
+	void wait(Message* message);
+	void wakeup(Message* message);
+
+	friend class Message;
+public:
+	MessageContext(uv_loop_t* loop);
+
+	ulong count();
+};
 
 class Message{
 private:
-	static int inc();
-	static void dec();
+	Message* next;
+	Message* prev;
+	MessageContext* context;
+	MessageHandler* handler;
 
-	Player* player;
-	Message* m_next;
 	bool initialized;
 	bool sending;
 
-	static void async_cb(uv_async_t* async);
-public:
-	static void init();
+	friend class MessageContext;
 
-	Message(Player* p);
+	void received();
+public:
+	Message(MessageHandler* handler, MessageContext* context);
 	~Message();
 
-	int async_init();
-
+	int init();
+	void destroy();
 	void send();
 	void wait();
-	void received();
 };
