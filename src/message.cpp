@@ -84,6 +84,7 @@ void MessageContext::dec(Message* message){
 		uv_close((uv_handle_t*)async, nullptr);
 
 		async = nullptr;
+		active = false;
 		mutex.unlock();
 	}
 }
