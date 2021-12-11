@@ -1,16 +1,33 @@
-#include <iostream>
 #include <uv.h>
 #include <netdb.h>
 #include <sodium/crypto_secretbox.h>
 #include <sodium/randombytes.h>
 #include <arpa/inet.h>
 #include "wrapper.h"
-#include "message.h"
 
-#define BUFFER_SIZE 8192
+PlayerCallbacks PlayerWrapper::callbacks = {
+	PlayerWrapper::player_ready,
+	PlayerWrapper::player_seeked,
+	PlayerWrapper::player_packet,
+	PlayerWrapper::player_send_packet,
+	PlayerWrapper::player_finish,
+	PlayerWrapper::player_error
+};
+
+enum{
+	BUFFER_SIZE = 8192
+};
+
+enum MessageType{
+	MESSAGE_NONE = 0,
+	MESSAGE_READY,
+	MESSAGE_PACKET,
+	MESSAGE_FINISH,
+	MESSAGE_ERROR
+};
 
 Napi::Function PlayerWrapper::init(Napi::Env env){
-	Napi::Function constructor = DefineClass(env, "Player", {
+	Napi::Function constructor = DefineClass(env, "FFPlayer", {
 		InstanceMethod<&PlayerWrapper::setURL>("setURL"),
 		InstanceMethod<&PlayerWrapper::setOutput>("setOutput"),
 		InstanceMethod<&PlayerWrapper::setPaused>("setPaused"),
@@ -32,30 +49,274 @@ Napi::Function PlayerWrapper::init(Napi::Env env){
 		InstanceMethod<&PlayerWrapper::updateSecretBox>("updateSecretBox"),
 		InstanceMethod<&PlayerWrapper::getSecretBox>("getSecretBox"),
 		InstanceMethod<&PlayerWrapper::pipe>("pipe"),
-		InstanceMethod<&PlayerWrapper::isCodecCopy>("isCodecCopy")
+		InstanceMethod<&PlayerWrapper::isCodecCopy>("isCodecCopy"),
+		InstanceMethod<&PlayerWrapper::send>("send")
 	});
 
 	return constructor;
 }
 
-PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<PlayerWrapper>(info), self(Napi::Persistent(info.This().As<Napi::Object>())){
+#define containerof(struct, field, addr) ((struct*)((uintptr_t)(addr) - offsetof(struct, field)))
+
+class AddonContext{
+public:
+	MessageContext message;
+	PlayerContext player;
+
+	bool closing;
+
+	AddonContext(uv_loop_t* loop): message(loop){
+		closing = false;
+	}
+
+	void closed(){
+		if(!closing || message.count())
+			return;
+		player.wait_threads();
+
+		free(this);
+	}
+
+	void close(){
+		closing = true;
+
+		closed();
+	}
+};
+
+static void finalizer(Napi::Env env, AddonContext* context){
+	context -> close();
+}
+
+static AddonContext* create_context(Napi::Env env){
+	AddonContext* context;
+
+	context = env.GetInstanceData<AddonContext>();
+
+	if(context)
+		return context;
+	uv_loop_t* loop;
+
+	if(napi_get_uv_event_loop(env, &loop) != napi_ok)
+		throw Napi::Error::New(env, "Could not get event loop");
+	context = (AddonContext*)calloc(1, sizeof(AddonContext));
+
+	if(!context)
+		throw Napi::Error::New(env, "Out of memory");
+	new (context) AddonContext(loop);
+
+	env.SetInstanceData<AddonContext, finalizer>(context);
+
+	return context;
+}
+
+int PlayerWrapper::player_ready(Player* player){
+	int err = AVERROR_EXIT;
+
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(wrapper){
+		wrapper -> packet_emitted = false;
+		err = wrapper -> send_message(MESSAGE_READY);
+	}
+
+	player -> data_mutex.unlock();
+
+	return err;
+}
+
+int PlayerWrapper::player_seeked(Player* player){
+	int err = 0;
+
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(!wrapper)
+		err = AVERROR_EXIT;
+	else
+		wrapper -> packet_emitted = false;
+	player -> data_mutex.unlock();
+
+	return err;
+}
+
+int PlayerWrapper::player_packet(Player* player, AVPacket* packet){
+	int err = AVERROR_EXIT;
+
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(wrapper){
+		err = wrapper -> process_packet(packet);
+
+		if(err){
+			char buf[256];
+
+			av_strerror(err, buf, sizeof(buf));
+
+			wrapper -> error.clear();
+			wrapper -> error += buf;
+			wrapper -> error_code = err;
+			wrapper -> send_message(MESSAGE_ERROR);
+
+			err = AVERROR_EXIT;
+		}
+	}
+
+	player -> data_mutex.unlock();
+
+	return err;
+}
+
+int PlayerWrapper::player_send_packet(Player* player){
+	int err = AVERROR_EXIT;
+
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(wrapper){
+		if(wrapper -> ext_send){
+			err = wrapper -> send_packet();
+
+			if(err){
+				char buf[256];
+
+				av_strerror(err, buf, sizeof(buf));
+
+				wrapper -> error.clear();
+				wrapper -> error += buf;
+				wrapper -> error_code = err;
+				wrapper -> send_message(MESSAGE_ERROR);
+
+				err = AVERROR_EXIT;
+			}else if(!wrapper -> packet_emitted){
+				wrapper -> packet_emitted = true;
+				err = wrapper -> send_message(MESSAGE_PACKET);
+			}
+		}else{
+			err = wrapper -> send_message(MESSAGE_PACKET);
+		}
+	}
+
+	player -> data_mutex.unlock();
+
+	return err;
+}
+
+int PlayerWrapper::player_finish(Player* player){
+	int err = AVERROR_EXIT;
+
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(wrapper){
+		wrapper -> packet_emitted = false;
+		err = wrapper -> send_message(MESSAGE_FINISH);
+	}
+
+	player -> data_mutex.unlock();
+
+	return err;
+}
+
+void PlayerWrapper::player_error(Player* player, const std::string& error, int code){
+	PlayerWrapper* wrapper;
+
+	player -> data_mutex.lock();
+	wrapper = (PlayerWrapper*)player -> data;
+
+	if(wrapper){
+		wrapper -> error.clear();
+		wrapper -> error += error;
+		wrapper -> error_code = code;
+		wrapper -> send_message(MESSAGE_ERROR);
+	}
+
+	player -> data_mutex.unlock();
+}
+
+int PlayerWrapper::send_message(int type){
+	Player* player = this -> player;
+
+	bool sent = false;
+
+	message_type = type;
+	message.send();
+	mutex.lock();
+	player -> data_mutex.unlock();
+	message.wait();
+	player -> data_mutex.lock();
+	mutex.unlock();
+
+	return player -> data ? 0 : AVERROR_EXIT;
+}
+
+void PlayerWrapper::handle_message(){
+	Napi::HandleScope scope(Env());
+
+	try{
+		switch(message_type){
+			case MESSAGE_READY:
+				handle_ready();
+
+				break;
+			case MESSAGE_PACKET:
+				handle_packet();
+
+				break;
+			case MESSAGE_FINISH:
+				handle_finish();
+
+				break;
+			case MESSAGE_ERROR:
+				handle_error(error, error_code);
+
+				break;
+		}
+	}catch(Napi::Error& e){
+		try{
+			e.ThrowAsJavaScriptException();
+		}catch(Napi::Error& e){
+			/* already throwing an exception */
+		}
+	}
+}
+
+PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info):
+	Napi::ObjectWrap<PlayerWrapper>(info), self(Napi::Persistent(info.This().As<Napi::Object>())),
+	context(create_context(info.Env())),
+	message(this, &context -> message){
 	player = nullptr;
 	addr = nullptr;
 	fd = -1;
 	ext_send = false;
+	packet_emitted = false;
+
 	packet = av_packet_alloc();
 
 	if(!packet)
-		throw std::bad_alloc();
+		/* if we're really out of memory, let node js handle it */
+		throw Napi::Error::New(Env(), "Out of memory");
 	try{
-		player = new Player(this);
+		error.reserve(256);
+
+		player = new Player(&context -> player, &callbacks, this);
 	}catch(std::bad_alloc& e){
 		av_packet_free(&packet);
 
-		throw;
+		throw Napi::Error::New(Env(), "Out of memory");
 	}
-
-	uv_mutex_init(&mutex);
 
 	memset(secret_box.nonce_buffer, 0, sizeof(secret_box.nonce_buffer));
 	memset(secret_box.audio_nonce, 0, sizeof(secret_box.audio_nonce));
@@ -65,11 +326,7 @@ PlayerWrapper::PlayerWrapper(const Napi::CallbackInfo& info) : Napi::ObjectWrap<
 }
 
 PlayerWrapper::~PlayerWrapper(){
-	if(player){
-		player -> destroy();
-
-		av_packet_free(&packet);
-	}
+	do_destroy();
 }
 
 void PlayerWrapper::checkDestroyed(Napi::Env env){
@@ -88,6 +345,7 @@ Napi::Value PlayerWrapper::setURL(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::setOutput(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
+	player -> setOutputCodec(AV_CODEC_ID_OPUS);
 	player -> setFormat(info[0].As<Napi::Number>().Int32Value(), info[1].As<Napi::Number>().Int32Value(), info[2].As<Napi::Number>().Int32Value());
 
 	return info.Env().Undefined();
@@ -181,13 +439,13 @@ Napi::Value PlayerWrapper::getDuration(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::getFramesDropped(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	return Napi::Number::New(info.Env(), player -> getDroppedFrames());
+	return Napi::Number::New(info.Env(), player -> getDroppedSamples() / 960);
 }
 
 Napi::Value PlayerWrapper::getTotalFrames(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	return Napi::Number::New(info.Env(), player -> getTotalFrames());
+	return Napi::Number::New(info.Env(), player -> getTotalSamples() / 960);
 }
 
 Napi::Value PlayerWrapper::getTotalPackets(const Napi::CallbackInfo& info){
@@ -199,15 +457,18 @@ Napi::Value PlayerWrapper::getTotalPackets(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::start(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	try{
-		player -> start();
-	}catch(PlayerException& e){
-		std::string err(e.error);
+	int err = message.init();
 
-		err += ": ";
-		err += uv_strerror(e.code);
+	if(err)
+		throw Napi::Error::New(info.Env(), "Failed to create uv_async_t");
+	err = player -> start();
 
-		throw Napi::Error::New(info.Env(), err);
+	if(err){
+		std::string str("Could not start thread: ");
+
+		str += uv_strerror(err);
+
+		throw Napi::Error::New(info.Env(), str);
 	}
 
 	return info.Env().Undefined();
@@ -222,25 +483,7 @@ Napi::Value PlayerWrapper::stop(const Napi::CallbackInfo& info){
 }
 
 Napi::Value PlayerWrapper::destroy(const Napi::CallbackInfo& info){
-	if(player){
-		uv_mutex_lock(&mutex);
-
-		fd = -1;
-
-		uv_mutex_unlock(&mutex);
-
-		player -> destroy();
-		player = nullptr;
-
-		std::vector<uint8_t>().swap(secret_box.secret_key);
-		std::vector<uint8_t>().swap(secret_box.buffer);
-
-		av_packet_free(&packet);
-		free(addr);
-
-		self.Reset();
-		buffer.Reset();
-	}
+	do_destroy();
 
 	return info.Env().Undefined();
 }
@@ -252,25 +495,31 @@ Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
 	Napi::Number mode = info[1].As<Napi::Number>();
 	Napi::Number ssrc = info[2].As<Napi::Number>();
 
-	uv_mutex_lock(&mutex);
+	secretbox.lock();
 
-	if(key.ByteLength() < 32)
-		secret_box.secret_key.resize(32);
-	else
-		secret_box.secret_key.resize(key.ByteLength());
-	if(!secret_box.buffer.size())
-		secret_box.buffer.resize(BUFFER_SIZE);
-	memcpy(secret_box.secret_key.data(), key.Data(), key.ByteLength());
+	try{
+		if(key.ByteLength() < 32)
+			secret_box.secret_key.resize(32);
+		else
+			secret_box.secret_key.resize(key.ByteLength());
+		if(!secret_box.buffer.size())
+			secret_box.buffer.resize(BUFFER_SIZE);
+		memcpy(secret_box.secret_key.data(), key.Data(), key.ByteLength());
 
-	secret_box.buffer[0] = 0x80;
-	secret_box.buffer[1] = 0x78;
-	secret_box.mode = mode.Int32Value();
-	secret_box.ssrc = ssrc.Int32Value();
-	secret_box.sequence = 0;
-	secret_box.timestamp = 0;
-	secret_box.nonce = 0;
+		secret_box.buffer[0] = 0x80;
+		secret_box.buffer[1] = 0x78;
+		secret_box.mode = mode.Int32Value();
+		secret_box.ssrc = ssrc.Int32Value();
+		secret_box.sequence = 0;
+		secret_box.timestamp = 0;
+		secret_box.nonce = 0;
+	}catch(std::bad_alloc& e){
+		secretbox.unlock();
 
-	uv_mutex_unlock(&mutex);
+		throw Napi::Error::New(info.Env(), "Out of memory");
+	}
+
+	secretbox.unlock();
 
 	return info.Env().Undefined();
 }
@@ -282,7 +531,6 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 	int port;
 	std::string ip;
 
-	player -> setPacketEmitOnce(true);
 	ext_send = true;
 
 	if(fd >= 0){
@@ -314,7 +562,7 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 		sockaddr_in* inaddr = (sockaddr_in*)calloc(1, sizeof(sockaddr_in));
 
 		if(!inaddr)
-			throw std::bad_alloc();
+			throw Napi::Error::New(Env(), "Out of memory");
 		inaddr -> sin_port = htons(port);
 		inaddr -> sin_addr = in;
 		inaddr -> sin_family = AF_INET;
@@ -324,7 +572,7 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 		sockaddr_in6* in6addr = (sockaddr_in6*)calloc(1, sizeof(sockaddr_in6));
 
 		if(!in6addr)
-			throw std::bad_alloc();
+			throw Napi::Error::New(Env(), "Out of memory");
 		in6addr -> sin6_port = htons(port);
 		in6addr -> sin6_addr = in6;
 		in6addr -> sin6_family = AF_INET6;
@@ -332,7 +580,7 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 		addresslen = sizeof(sockaddr_in6);
 	}
 
-	uv_mutex_lock(&mutex);
+	secretbox.lock();
 
 	free(addr);
 
@@ -341,7 +589,7 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 	addr = address;
 	addr_len = addresslen;
 
-	uv_mutex_unlock(&mutex);
+	secretbox.unlock();
 
 	return info.Env().Undefined();
 }
@@ -351,13 +599,13 @@ Napi::Value PlayerWrapper::updateSecretBox(const Napi::CallbackInfo& info){
 	Napi::Number timestamp = info[1].As<Napi::Number>();
 	Napi::Number nonce = info[2].As<Napi::Number>();
 
-	uv_mutex_lock(&mutex);
+	secretbox.lock();
 
 	secret_box.sequence = sequence.Uint32Value();
 	secret_box.timestamp = timestamp.Uint32Value();
 	secret_box.nonce = nonce.Uint32Value();
 
-	uv_mutex_unlock(&mutex);
+	secretbox.unlock();
 
 	return info.Env().Undefined();
 }
@@ -378,6 +626,10 @@ Napi::Value PlayerWrapper::isCodecCopy(const Napi::CallbackInfo& info){
 	return Napi::Boolean::New(info.Env(), player -> isCodecCopy());
 }
 
+Napi::Value PlayerWrapper::send(const Napi::CallbackInfo& info){
+	return info.Env().Undefined();
+}
+
 template<class T>
 static void write(void* data, T value){
 	*((T*)data) = value;
@@ -395,23 +647,21 @@ static void write_offset(std::vector<uint8_t>& data, T value, int& offset){
 	offset += sizeof(T);
 }
 
-int PlayerWrapper::process_packet(){
-	if(!player) abort();
-
+int PlayerWrapper::process_packet(AVPacket* player_packet){
 	av_packet_unref(packet);
-	av_packet_move_ref(packet, player -> packet);
+	av_packet_move_ref(packet, player_packet);
 
 	if(!secret_box.secret_key.size())
 		return 0;
 	if(packet -> size > crypto_secretbox_MESSAGEBYTES_MAX)
-		return AVERROR(EINVAL); /* should never happen */
+		return AVERROR_EXIT; /* should never happen */
 	int offset = 2,
 		len,
 		msg_length = packet -> size + crypto_secretbox_MACBYTES;
 	int err = 0;
 	uint8_t* nonce;
 
-	uv_mutex_lock(&mutex);
+	secretbox.lock();
 
 	secret_box.sequence++;
 	secret_box.timestamp += packet -> duration;
@@ -458,7 +708,7 @@ int PlayerWrapper::process_packet(){
 
 	secret_box.message_size = offset + msg_length + len;
 
-	uv_mutex_unlock(&mutex);
+	secretbox.unlock();
 
 	return err;
 
@@ -470,53 +720,20 @@ int PlayerWrapper::process_packet(){
 int PlayerWrapper::send_packet(){
 	if(!ext_send)
 		return 0;
-	if(!player) abort();
-
 	int err = 0;
 
-	uv_mutex_lock(&mutex);
+	secretbox.lock();
 
 	if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
-		if(errno != EAGAIN){
-			if(errno == EBADF)
-				fd = -1;
-			else
-				err = -errno;
-		}
+		if(errno == EBADF)
+			fd = -1;
+		else
+			err = AVERROR(errno);
 	}
 
-	uv_mutex_unlock(&mutex);
+	secretbox.unlock();
 
 	return err;
-}
-
-void PlayerWrapper::signal(PlayerSignal signal){
-	if(!player) abort();
-
-	Napi::HandleScope scope(Env());
-
-	try{
-		switch(signal){
-			case PLAYER_READY:
-				handle_ready();
-
-				break;
-			case PLAYER_PACKET:
-				handle_packet();
-
-				break;
-			case PLAYER_FINISH:
-				handle_finish();
-
-				break;
-			case PLAYER_ERROR:
-				handle_error();
-
-				break;
-		}
-	}catch(Napi::Error& e){
-		e.ThrowAsJavaScriptException();
-	}
 }
 
 void PlayerWrapper::handle_ready(){
@@ -546,23 +763,22 @@ void PlayerWrapper::handle_packet(){
 		array = Napi::Uint8Array::New(Env(), size);
 	}
 
+	int64_t duration = packet -> duration;
+
 	memcpy(array.Data(), data, size);
-
-	self.Get("onpacket").As<Napi::Function>().Call(self.Value(), {array, Napi::Number::New(Env(), size), Napi::Number::New(Env(), packet -> duration)});
-
 	av_packet_unref(packet);
+
+	self.Get("onpacket").As<Napi::Function>().Call(self.Value(), {array, Napi::Number::New(Env(), size), Napi::Number::New(Env(), duration)});
 }
 
 void PlayerWrapper::handle_finish(){
 	self.Get("onfinish").As<Napi::Function>().Call(self.Value(), {});
 }
 
-void PlayerWrapper::handle_error(){
-	const PlayerError& err = player -> getError();
-
+void PlayerWrapper::handle_error(std::string& str, int err_code){
 	bool retry;
 
-	switch(err.code){
+	switch(err_code){
 		case AVERROR_HTTP_BAD_REQUEST:
 		case AVERROR_HTTP_UNAUTHORIZED:
 		case AVERROR_HTTP_FORBIDDEN:
@@ -578,9 +794,32 @@ void PlayerWrapper::handle_error(){
 			break;
 	}
 
-	Napi::Error error = Napi::Error::New(Env(), err.error);
-	Napi::Number code = Napi::Number::New(Env(), err.code);
+	Napi::Error error = Napi::Error::New(Env(), str);
+	Napi::Number code = Napi::Number::New(Env(), err_code);
 	Napi::Boolean retryable = Napi::Boolean::New(Env(), retry);
 
 	self.Get("onerror").As<Napi::Function>().Call(self.Value(), {error.Value(), code, retryable});
+}
+
+void PlayerWrapper::do_destroy(){
+	if(!player)
+		return;
+	player -> data_mutex.lock();
+	player -> data = nullptr;
+	player -> destroy();
+	message.destroy();
+	player -> data_mutex.unlock();
+	mutex.lock();
+	mutex.unlock();
+	player = nullptr;
+
+	std::vector<uint8_t>().swap(secret_box.secret_key);
+	std::vector<uint8_t>().swap(secret_box.buffer);
+
+	av_packet_free(&packet);
+	free(addr);
+
+	self.Reset();
+	buffer.Reset();
+	context -> closed();
 }

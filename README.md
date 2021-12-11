@@ -25,8 +25,7 @@ npm i git://github.com/ilikdoge/sange.git
 
 ### ffmpeg
 
-Building ffmpeg from source
-May boost performance
+Building ffmpeg from source may boost performance
 
 ```bash
 apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev
