@@ -1,5 +1,6 @@
 #include <uv.h>
 #include <netdb.h>
+#include <unistd.h>
 #include <sodium/crypto_secretbox.h>
 #include <sodium/randombytes.h>
 #include <arpa/inet.h>
@@ -527,18 +528,30 @@ Napi::Value PlayerWrapper::setSecretBox(const Napi::CallbackInfo& info){
 Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	int fd = info[0].As<Napi::Number>().Int32Value();
-	int port;
+	int fd = -1, port;
+
 	std::string ip;
+	std::string errorstr;
+
+	sockaddr* address = nullptr;
+	socklen_t addresslen;
 
 	ext_send = true;
 
-	if(fd >= 0){
-		ip = info[1].As<Napi::String>().Utf8Value();
-		port = info[2].As<Napi::Number>().Int32Value();
-	}else{
-		this -> fd = -1;
+	secretbox.lock();
 
+	if(this -> fd != -1){
+		close(this -> fd);
+
+		this -> fd = -1;
+	}
+
+	secretbox.unlock();
+
+	if(info.Length()){
+		ip = info[0].As<Napi::String>().Utf8Value();
+		port = info[1].As<Napi::Number>().Int32Value();
+	}else{
 		return info.Env().Undefined();
 	}
 
@@ -555,29 +568,36 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 		family = AF_INET6;
 	else
 		throw Napi::Error::New(info.Env(), "Invalid IP address");
-	sockaddr* address;
-	socklen_t addresslen;
+	fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 
+	if(fd < 0)
+		goto socket;
 	if(family == AF_INET){
 		sockaddr_in* inaddr = (sockaddr_in*)calloc(1, sizeof(sockaddr_in));
 
 		if(!inaddr)
-			throw Napi::Error::New(Env(), "Out of memory");
+			goto nomem;
+		inaddr -> sin_family = AF_INET;
+		addresslen = sizeof(*inaddr);
+		address = (sockaddr*)inaddr;
+
+		if(bind(fd, (sockaddr*)inaddr, addresslen) < 0)
+			goto bind;
 		inaddr -> sin_port = htons(port);
 		inaddr -> sin_addr = in;
-		inaddr -> sin_family = AF_INET;
-		address = (sockaddr*)inaddr;
-		addresslen = sizeof(sockaddr_in);
 	}else{
 		sockaddr_in6* in6addr = (sockaddr_in6*)calloc(1, sizeof(sockaddr_in6));
 
 		if(!in6addr)
-			throw Napi::Error::New(Env(), "Out of memory");
+			goto nomem;
+		in6addr -> sin6_family = AF_INET6;
+		addresslen = sizeof(*in6addr);
+		address = (sockaddr*)in6addr;
+
+		if(bind(fd, (sockaddr*)in6addr, addresslen) < 0)
+			goto bind;
 		in6addr -> sin6_port = htons(port);
 		in6addr -> sin6_addr = in6;
-		in6addr -> sin6_family = AF_INET6;
-		address = (sockaddr*)in6addr;
-		addresslen = sizeof(sockaddr_in6);
 	}
 
 	secretbox.lock();
@@ -592,6 +612,31 @@ Napi::Value PlayerWrapper::pipe(const Napi::CallbackInfo& info){
 	secretbox.unlock();
 
 	return info.Env().Undefined();
+
+	nomem:
+
+	close(fd);
+
+	throw Napi::Error::New(Env(), "Out of memory");
+
+	socket:
+
+	errorstr += "Could not create socket: ";
+
+	goto err;
+
+	bind:
+
+	close(fd);
+	free(address);
+
+	errorstr += "Could not bind socket: ";
+
+	err:
+
+	errorstr += strerror(errno);
+
+	throw Napi::Error::New(info.Env(), errorstr);
 }
 
 Napi::Value PlayerWrapper::updateSecretBox(const Napi::CallbackInfo& info){
@@ -724,11 +769,9 @@ int PlayerWrapper::send_packet(){
 
 	secretbox.lock();
 
-	if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size, MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
-		if(errno == EBADF)
-			fd = -1;
-		else
-			err = AVERROR(errno);
+	if(fd >= 0 && sendto(fd, secret_box.buffer.data(), secret_box.message_size,
+		MSG_DONTWAIT | MSG_NOSIGNAL, addr, addr_len) < 0){
+		err = AVERROR(errno);
 	}
 
 	secretbox.unlock();
@@ -812,6 +855,9 @@ void PlayerWrapper::do_destroy(){
 	mutex.lock();
 	mutex.unlock();
 	player = nullptr;
+
+	if(fd != -1)
+		close(fd);
 
 	std::vector<uint8_t>().swap(secret_box.secret_key);
 	std::vector<uint8_t>().swap(secret_box.buffer);
