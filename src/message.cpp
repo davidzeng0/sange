@@ -32,18 +32,20 @@ int MessageContext::inc(Message* message){
 	if(active_messages + 1 == 0)
 		return UV_ENOMEM;
 	if(!active_messages){
-		async = (uv_async_t*)calloc(1, sizeof(uv_async_t));
+		uv_async_t* asyn = (uv_async_t*)calloc(1, sizeof(uv_async_t));
 
-		if(!async)
+		if(!asyn)
 			return UV_ENOMEM;
-		async -> data = this;
-		err = uv_async_init(loop, async, async_cb);
+		asyn -> data = this;
+		err = uv_async_init(loop, asyn, async_cb);
 
 		if(err){
-			free(async);
+			free(asyn);
 
 			return err;
 		}
+
+		async = asyn;
 	}
 
 	active_messages++;

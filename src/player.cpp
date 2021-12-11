@@ -415,6 +415,7 @@ int Player::read_packet(){
 
 void Player::run(){
 	AVDictionary* options = nullptr;
+	std::string local_url;
 
 	int err = AVERROR(ENOMEM);
 	int stream_index;
@@ -450,7 +451,18 @@ void Player::run(){
 	if((err = av_dict_set(&options, "icy", "0", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
 	error.str.clear();
-	err = avformat_open_input(&format_ctx, url.c_str(), nullptr, &options);
+
+	mutex.lock();
+	local_url = std::move(url);
+	mutex.unlock();
+
+	err = avformat_open_input(&format_ctx, local_url.c_str(), nullptr, &options);
+
+	mutex.lock();
+
+	if(url.empty())
+		url = std::move(local_url);
+	mutex.unlock();
 
 	av_dict_free(&options);
 
@@ -797,7 +809,9 @@ int Player::start(){
 }
 
 void Player::setURL(std::string _url){
+	mutex.lock();
 	url = _url;
+	mutex.unlock();
 }
 
 void Player::setOutputCodec(AVCodecID id){

@@ -806,9 +806,9 @@ void PlayerWrapper::do_destroy(){
 		return;
 	player -> data_mutex.lock();
 	player -> data = nullptr;
-	player -> destroy();
 	message.destroy();
 	player -> data_mutex.unlock();
+	player -> destroy();
 	mutex.lock();
 	mutex.unlock();
 	player = nullptr;
