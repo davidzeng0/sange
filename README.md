@@ -1,6 +1,8 @@
 # sange
 FFmpeg powered audio player in node.js
 
+*Sange and Yasha, when attuned by the moonlight and used together, become a very powerful combination.*
+
 ### prerequisites
 only compiles on Linux or WSL2+.
 
