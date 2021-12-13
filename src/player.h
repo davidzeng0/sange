@@ -7,6 +7,7 @@ class Player;
 struct PlayerCallbacks{
 	int (*ready)(Player* player);
 	int (*seeked)(Player* player);
+	int (*unpaused)(Player* player);
 	int (*packet)(Player* player, AVPacket* packet);
 	int (*send_packet)(Player* player);
 	int (*finish)(Player* player);

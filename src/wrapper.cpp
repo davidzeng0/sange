@@ -9,6 +9,7 @@
 PlayerCallbacks PlayerWrapper::callbacks = {
 	PlayerWrapper::player_ready,
 	PlayerWrapper::player_seeked,
+	PlayerWrapper::player_seeked,
 	PlayerWrapper::player_packet,
 	PlayerWrapper::player_send_packet,
 	PlayerWrapper::player_finish,
