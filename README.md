@@ -2,7 +2,7 @@
 FFmpeg powered audio player in node.js
 
 ### prerequisites
-Only compiles on Linux or WSL2+.
+only compiles on Linux or WSL2+.
 
 1. node.js
 2. cmake
@@ -25,8 +25,8 @@ npm i git://github.com/ilikdoge/sange.git
 
 ### ffmpeg
 
-Building ffmpeg from source may boost performance<br>
-Known Issue: the default TLS library (gnutls) that ships with ffmpeg causes an infinite loop. Building with OpenSSL may fix that issue.
+building ffmpeg from source may boost performance<br>
+**known issue: the default TLS library (gnutls) that ships with ffmpeg causes an infinite loop. building with OpenSSL fixes that issue.**
 
 ```bash
 apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev nasm
