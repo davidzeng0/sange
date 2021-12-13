@@ -578,6 +578,12 @@ void Player::run(){
 
 			if(!should_run())
 				break;
+			err = callback_wrap([&]{
+				return callbacks -> unpaused(this);
+			});
+
+			if(err)
+				break;
 			clock_gettime(CLOCK_MONOTONIC, &sleep);
 		}
 

@@ -25,12 +25,13 @@ npm i git://github.com/ilikdoge/sange.git
 
 ### ffmpeg
 
-Building ffmpeg from source may boost performance
+Building ffmpeg from source may boost performance<br>
+Known Issue: the default TLS library (gnutls) that ships with ffmpeg causes an infinite loop. Building with OpenSSL may fix that issue.
 
 ```bash
-apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev
+apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev nasm
 
-git clone --depth 0 https://github.com/FFmpeg/FFmpeg
+git clone --depth 1 https://github.com/FFmpeg/FFmpeg
 cd FFmpeg
 ./configure --arch=amd64 --disable-stripping --enable-openssl --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-shared --enable-nonfree
 make -j $(nproc)
