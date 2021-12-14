@@ -16,7 +16,9 @@ only compiles on Linux or WSL2+.
 ### install
 ```bash
 # dependencies
-apt install cmake g++ gcc libavcodec-dev libavcodec58 libavformat-dev libavformat58 libavutil-dev libavutil56 libavfilter7 libavfilter-dev libswresample-dev libswresample3 libuv1-dev libopus-dev
+apt install cmake g++ gcc libuv1-dev libopus-dev
+# ffmpeg (see below for issues)
+apt install libavcodec-dev libavcodec58 libavformat-dev libavformat58 libavutil-dev libavutil56 libavfilter7 libavfilter-dev libswresample-dev libswresample3
 
 # optional
 apt install ninja-build
