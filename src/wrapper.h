@@ -63,9 +63,6 @@ private:
 
 	int fd;
 
-	sockaddr* addr;
-	socklen_t addr_len;
-
 	std::string error;
 	int error_code;
 
