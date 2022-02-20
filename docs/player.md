@@ -24,6 +24,7 @@ player.on('error', (e, r) => { console.log('error', e) });
 Play from a URL
 ```js
 player.setURL('http://example.com/video.mp4');
+player.setURL('file:///path/to/video.mp4', true /* allow playing from local files */);
 player.setOutput(2, 48000, 256000); // 2 channels, 48000Hz, 256kbps
 player.start();
 ```

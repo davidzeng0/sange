@@ -19,8 +19,8 @@ class Player extends EventEmitter{
 		}
 	}
 
-	setURL(url){
-		return this.ffplayer.setURL(url);
+	setURL(url, isfile = false){
+		return this.ffplayer.setURL(url, isfile);
 	}
 
 	setOutput(channels, sample_rate, bitrate){

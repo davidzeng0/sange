@@ -222,6 +222,8 @@ private:
 
 	std::string url;
 
+	bool isfile;
+
 	bool running;
 	bool destroyed;
 
@@ -312,7 +314,7 @@ public:
 
 	int start();
 
-	void setURL(std::string url);
+	void setURL(std::string url, bool isfile);
 	void setOutputCodec(AVCodecID codec);
 	void setFormat(int channels, int sample_rate, int bitrate);
 
