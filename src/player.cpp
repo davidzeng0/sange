@@ -417,6 +417,8 @@ void Player::run(){
 	AVDictionary* options = nullptr;
 	std::string local_url;
 
+	bool local_isfile;
+
 	int err = AVERROR(ENOMEM);
 	int stream_index;
 
@@ -432,12 +434,9 @@ void Player::run(){
 
 	if(!format_ctx)
 		goto end;
-	format_ctx -> protocol_whitelist = strdup("http,https,tcp,tls,crypto");
 	format_ctx -> interrupt_callback.callback = decode_interrupt;
 	format_ctx -> interrupt_callback.opaque = this;
 
-	if(!format_ctx -> protocol_whitelist)
-		goto end;
 	if((err = av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.72 Safari/537.36", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
 	if((err = av_dict_set(&options, "scan_all_pmts", "1", AV_DICT_MATCH_CASE)) < 0)
@@ -454,10 +453,13 @@ void Player::run(){
 
 	mutex.lock();
 	local_url = std::move(url);
+	local_isfile = isfile;
 	mutex.unlock();
 
-	err = avformat_open_input(&format_ctx, local_url.c_str(), nullptr, &options);
+	format_ctx -> protocol_whitelist = isfile ? strdup("file,http,https,tcp,tls,crypto") : strdup("http,https,tcp,tls,crypto");
 
+	if(format_ctx -> protocol_whitelist)
+		err = avformat_open_input(&format_ctx, local_url.c_str(), nullptr, &options);
 	mutex.lock();
 
 	if(url.empty())
@@ -571,22 +573,6 @@ void Player::run(){
 			}
 		}
 
-		if(b_pause){
-			wait_cond([&]{
-				return b_pause && should_run();
-			});
-
-			if(!should_run())
-				break;
-			err = callback_wrap([&]{
-				return callbacks -> unpaused(this);
-			});
-
-			if(err)
-				break;
-			clock_gettime(CLOCK_MONOTONIC, &sleep);
-		}
-
 		err = read_packet();
 
 		if(!should_run())
@@ -611,6 +597,22 @@ void Player::run(){
 			if(err == AVERROR_EXIT)
 				break;
 			goto end;
+		}
+
+		if(b_pause){
+			wait_cond([&]{
+				return b_pause && should_run();
+			});
+
+			if(!should_run())
+				break;
+			err = callback_wrap([&]{
+				return callbacks -> unpaused(this);
+			});
+
+			if(err)
+				break;
+			clock_gettime(CLOCK_MONOTONIC, &sleep);
 		}
 
 		long dur = packet -> duration,
@@ -670,6 +672,8 @@ void Player::run(){
 	return;
 
 	end:
+
+	av_dict_free(&options);
 
 	if(!err)
 		return;
@@ -759,6 +763,8 @@ Player::Player(PlayerContext* ctx, PlayerCallbacks* c, void* d): cond(CLOCK_MONO
 	callbacks = c;
 	data = d;
 
+	isfile = false;
+
 	time = 0;
 	time_start = 0;
 	duration = 0;
@@ -814,9 +820,10 @@ int Player::start(){
 	return 0;
 }
 
-void Player::setURL(std::string _url){
+void Player::setURL(std::string _url, bool _isfile){
 	mutex.lock();
 	url = _url;
+	isfile = _isfile;
 	mutex.unlock();
 }
 

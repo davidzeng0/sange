@@ -338,7 +338,11 @@ void PlayerWrapper::checkDestroyed(Napi::Env env){
 Napi::Value PlayerWrapper::setURL(const Napi::CallbackInfo& info){
 	checkDestroyed(info.Env());
 
-	player -> setURL(info[0].As<Napi::String>());
+	bool isfile = false;
+
+	if(info.Length() > 1 && info[1].As<Napi::Boolean>().Value())
+		isfile = true;
+	player -> setURL(info[0].As<Napi::String>(), isfile);
 
 	return info.Env().Undefined();
 }
