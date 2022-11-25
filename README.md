@@ -31,6 +31,7 @@ npm i git://github.com/ilikdoge/sange.git
 
 building ffmpeg from source may boost performance<br>
 **known issue: the default TLS library (gnutls) that ships with ffmpeg causes an infinite loop. building with OpenSSL fixes that issue.**
+**running with jemalloc helps with memory leaks**
 
 ```bash
 apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev nasm
@@ -41,4 +42,11 @@ cd FFmpeg
 make -j $(nproc)
 make install
 ldconfig
+```
+
+### run with jemalloc
+```bash
+apt install libjemalloc-dev
+
+LD_PRELOAD=/path/to/your/libjemalloc.so node entry.js
 ```
