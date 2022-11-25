@@ -456,7 +456,7 @@ void Player::run(){
 	local_isfile = isfile;
 	mutex.unlock();
 
-	format_ctx -> protocol_whitelist = isfile ? strdup("file,http,https,tcp,tls,crypto") : strdup("http,https,tcp,tls,crypto");
+	format_ctx -> protocol_whitelist = isfile ? av_strdup("file,http,https,tcp,tls,crypto") : av_strdup("http,https,tcp,tls,crypto");
 
 	if(format_ctx -> protocol_whitelist)
 		err = avformat_open_input(&format_ctx, local_url.c_str(), nullptr, &options);
