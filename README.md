@@ -24,7 +24,7 @@ apt install libavcodec-dev libavcodec58 libavformat-dev libavformat58 libavutil-
 apt install ninja-build
 
 # install
-npm i git://github.com/ilikdoge/sange.git
+npm i git://github.com/davidzeng0/sange.git
 ```
 
 ### ffmpeg
