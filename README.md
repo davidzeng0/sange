@@ -17,7 +17,7 @@ only compiles on Linux or WSL2+.
 ```bash
 # dependencies
 apt install cmake g++ gcc libuv1-dev libopus-dev
-# ffmpeg (see below for issues)
+# ffmpeg quick install (see below for issues and fixed installation)
 apt install libavcodec-dev libavcodec58 libavformat-dev libavformat58 libavutil-dev libavutil56 libavfilter7 libavfilter-dev libswresample-dev libswresample3
 
 # optional
@@ -33,6 +33,9 @@ building ffmpeg from source may boost performance<br>
 **known issue: the default TLS library (gnutls) that ships with ffmpeg causes an infinite loop. building with OpenSSL fixes that issue.**
 **running with jemalloc helps with memory leaks**
 
+before installing, make sure ffmpeg and its libraries are not already on the machine<br>
+by uninstalling all libav*-dev and libav* packages and deleting any manual installations
+of ffmpeg and its libraries to avoid issues
 ```bash
 apt install pkg-config libssl-dev libmp3lame-dev libopus-dev libvorbis-dev nasm
 
