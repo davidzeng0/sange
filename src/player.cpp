@@ -437,7 +437,7 @@ void Player::run(){
 	format_ctx -> interrupt_callback.callback = decode_interrupt;
 	format_ctx -> interrupt_callback.opaque = this;
 
-	if((err = av_dict_set(&options, "user_agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.72 Safari/537.36", AV_DICT_MATCH_CASE)) < 0)
+	if((err = av_dict_set(&options, "user_agent", "", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
 	if((err = av_dict_set(&options, "scan_all_pmts", "1", AV_DICT_MATCH_CASE)) < 0)
 		goto end;
